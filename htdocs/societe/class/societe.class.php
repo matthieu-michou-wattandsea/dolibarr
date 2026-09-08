@@ -1007,40 +1007,46 @@ class Societe extends CommonObject
 		$error = 0;
 
 		// Clean parameters
-		if (empty($this->status)) {
+		if (!isset($this->status) || empty($this->status)) {
 			$this->status = 0;
 		}
-		$this->name = $this->name ? trim($this->name) : trim((string) $this->nom);
+
+		// name / nom - backward compatibility
+		$this->name = (isset($this->name) && $this->name)
+			? trim($this->name)
+			: trim((string) (isset($this->nom) ? $this->nom : ''));
+
 		$this->setUpperOrLowerCase();
 		$this->nom = $this->name; // For backward compatibility
 
-		if (empty($this->client)) {
+		if (!isset($this->client) || empty($this->client)) {
 			$this->client = 0;
 		}
-		if (empty($this->fournisseur)) {
+		if (!isset($this->fournisseur) || empty($this->fournisseur)) {
 			$this->fournisseur = 0;
 		}
-		$this->import_key = trim((string) $this->import_key);
 
-		$this->code_compta_client = trim($this->code_compta_client ?? '');
+		$this->import_key = trim((string) (isset($this->import_key) ? $this->import_key : ''));
 
-		$this->accountancy_code_customer_general = trim($this->accountancy_code_customer_general ?? '');
+		$this->code_compta_client = trim(isset($this->code_compta_client) ? $this->code_compta_client : '');
+
+		$this->accountancy_code_customer_general = trim(isset($this->accountancy_code_customer_general) ? $this->accountancy_code_customer_general : '');
 		if ($this->accountancy_code_customer_general === '-1') {
 			$this->accountancy_code_customer_general = '';
 		}
-		$this->accountancy_code_customer = trim((string) $this->code_compta_client);
-		$this->accountancy_code_supplier_general = trim($this->accountancy_code_supplier_general ?? '');
+		$this->accountancy_code_customer = trim((string) (isset($this->code_compta_client) ? $this->code_compta_client : ''));
+		$this->accountancy_code_supplier_general = trim(isset($this->accountancy_code_supplier_general) ? $this->accountancy_code_supplier_general : '');
 		if ($this->accountancy_code_supplier_general === '-1') {
 			$this->accountancy_code_supplier_general = '';
 		}
-		$this->accountancy_code_supplier = trim((string) $this->code_compta_fournisseur);
-		$this->accountancy_code_buy = trim((string) $this->accountancy_code_buy);
-		$this->accountancy_code_sell = trim((string) $this->accountancy_code_sell);
+		$this->accountancy_code_supplier = trim((string) (isset($this->code_compta_fournisseur) ? $this->code_compta_fournisseur : ''));
+		$this->accountancy_code_buy = trim((string) (isset($this->accountancy_code_buy) ? $this->accountancy_code_buy : ''));
+		$this->accountancy_code_sell = trim((string) (isset($this->accountancy_code_sell) ? $this->accountancy_code_sell : ''));
 
-		if (!empty($this->multicurrency_code)) {
+		if (isset($this->multicurrency_code) && !empty($this->multicurrency_code)) {
 			$this->fk_multicurrency = MultiCurrency::getIdFromCode($this->db, $this->multicurrency_code);
 		}
-		if (empty($this->fk_multicurrency)) {
+		if (!isset($this->fk_multicurrency) || empty($this->fk_multicurrency)) {
 			$this->multicurrency_code = '';
 			$this->fk_multicurrency = 0;
 		}
