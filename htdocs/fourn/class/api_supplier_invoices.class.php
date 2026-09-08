@@ -323,13 +323,15 @@ class SupplierInvoices extends DolibarrApi
 	 *
 	 * @param int   $id Supplier invoice ID
 	 *
+	 * @url DELETE {id}
+	 *
 	 * @return array
 	 * @phan-return array{success:array{code:int,message:string}}
 	 * @phpstan-return array{success:array{code:int,message:string}}
 	 *
 	 * @throws RestException 403
 	 * @throws RestException 404
-	 * @throws RestException 500	System error
+	 * @throws RestException 500
 	 */
 	public function delete($id)
 	{
@@ -693,6 +695,50 @@ class SupplierInvoices extends DolibarrApi
 		return $this->_cleanObjectDatas($this->invoice);
 	}
 
+		/**
+	 * Sets a supplier invoice as canceled
+	 *
+	 * @param   int     $id             Supplier invoice ID
+	 * @return  Object                  Object with cleaned properties
+	 *
+	 * @url POST {id}/settocanceled
+	 *
+	 * @throws RestException 304
+	 * @throws RestException 403
+	 * @throws RestException 404
+	 * @throws RestException 500 System error
+	 */
+	public function settocanceled($id)
+	{
+		if (!DolibarrApiAccess::$user->hasRight('fournisseur', 'facture', 'creer')) {
+			throw new RestException(403);
+		}
+
+		$result = $this->invoice->fetch($id);
+		if (!$result) {
+			throw new RestException(404, 'Supplier invoice not found');
+		}
+
+		if (!DolibarrApi::_checkAccessToResource('fournisseur', $this->invoice->id, 'facture_fourn', 'facture')) {
+			throw new RestException(403, 'Access not allowed for login ' . DolibarrApiAccess::$user->login);
+		}
+
+		$result = $this->invoice->setCanceled(DolibarrApiAccess::$user);
+		if ($result == 0) {
+			throw new RestException(304, 'Nothing done.');
+		}
+		if ($result < 0) {
+			throw new RestException(500, 'Error: ' . $this->invoice->error);
+		}
+
+		$result = $this->invoice->fetch($id);
+		if (!$result) {
+			throw new RestException(404, 'Supplier invoice not found');
+		}
+
+		return $this->_cleanObjectDatas($this->invoice);
+	}
+
 	/**
 	 * Get lines of a supplier invoice
 	 *
@@ -770,6 +816,7 @@ class SupplierInvoices extends DolibarrApi
 
 		$updateRes = $this->invoice->addline(
 			$request_data->description,
+			$request_data->label,
 			$request_data->pu_ht,
 			$request_data->tva_tx,
 			$request_data->localtax1_tx,
@@ -840,6 +887,7 @@ class SupplierInvoices extends DolibarrApi
 		$updateRes = $this->invoice->updateline(
 			$lineid,
 			$request_data->description,
+			$request_data->label,
 			$request_data->pu_ht,
 			$request_data->tva_tx,
 			$request_data->localtax1_tx,
