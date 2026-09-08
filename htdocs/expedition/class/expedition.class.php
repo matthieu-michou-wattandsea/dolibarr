@@ -1038,6 +1038,9 @@ class Expedition extends CommonObject
 		$this->newref = dol_sanitizeFileName($numref);
 
 		$now = dol_now();
+		if(!empty($this->date_creation)) {
+			$now = $this->date_creation; 
+		}
 
 		// Validate
 		$sql = "UPDATE ".MAIN_DB_PREFIX."expedition SET";
@@ -2454,6 +2457,11 @@ class Expedition extends CommonObject
 
 			$this->db->free($result);
 
+			dol_syslog('DEBUG fetch_lines_free: '.count($this->lines).' lines loaded for exp '.$this->id, LOG_DEBUG);
+			foreach ($this->lines as $k => $l) {
+			    dol_syslog('  Line '.$k.': id='.$l->id.' qty='.$l->qty.' fk_elementdet='.var_export($l->fk_elementdet, true).' element_type='.$l->element_type, LOG_DEBUG);
+			}
+
 			return 1;
 		} else {
 			$this->error = $this->db->error();
@@ -3056,7 +3064,7 @@ class Expedition extends CommonObject
 	}
 
 	/**
-	 * Manage Stock MVt onb Close or valid Shipment
+	 * Manage Stock MVt on Close or valid Shipment
 	 *
 	 * @param      	User 	$user        		Object user that modify
 	 * @param		string	$labelmovement		Label of movement
@@ -3073,6 +3081,8 @@ class Expedition extends CommonObject
 
 		$langs->load("agenda");
 
+		$datem = !empty($this->date_shipping) ? $this->date_shipping : '';
+
 		// Loop on each product line to add a stock movement
 		$sql = "SELECT";
 		$sql .= " ed.rowid as edid, ed.fk_product, ed.qty, ed.fk_entrepot";
@@ -3085,7 +3095,6 @@ class Expedition extends CommonObject
 		$sql .= " LEFT JOIN " . $this->db->prefix() . "expeditiondet_batch as edb on edb.fk_expeditiondet = ed.rowid";
 		$sql .= " INNER JOIN " . $this->db->prefix() . "expedition as e ON ed.fk_expedition = e.rowid";
 		$sql .= " WHERE ed.fk_expedition = " . ((int) $this->id);
-		//$sql .= " AND cd.rowid = ed.fk_elementdet";
 
 		dol_syslog(get_class($this) . "::valid select details", LOG_DEBUG);
 		$resql = $this->db->query($sql);
@@ -3093,47 +3102,51 @@ class Expedition extends CommonObject
 			$cpt = $this->db->num_rows($resql);
 			for ($i = 0; $i < $cpt; $i++) {
 				$obj = $this->db->fetch_object($resql);
-				if (empty($obj->edbrowid)) {
-					$qty = $obj->qty;
-				} else {
-					$qty = $obj->edbqty;
-				}
-				if ($qty <= 0 || ($qty < 0 && !getDolGlobalInt('SHIPMENT_ALLOW_NEGATIVE_QTY'))) {
+
+				$qty = !empty($obj->edbrowid) ? (float)$obj->edbqty : (float)$obj->qty;
+				if ($qty == 0) {
 					continue;
 				}
-				dol_syslog(get_class($this) . "::valid movement index " . $i . " ed.rowid=" . $obj->edid . " edb.rowid=" . $obj->edbrowid);
+
+				dol_syslog(get_class($this) . "::manageStockMvtOnEvt movement index " . $i . " qty=".$qty." product=".$obj->fk_product." warehouse=".$obj->fk_entrepot." batch=[".$obj->batch."] eatby=[".$obj->eatby."] sellby=[".$obj->sellby."]", LOG_DEBUG);
 
 				$mouvS = new MouvementStock($this->db);
 				$mouvS->origin = &$this;
 				$mouvS->setOrigin($this->element, $this->id, $obj->cdid, $obj->edid);
 
+				// Version la plus simple : toujours livraison(), même avec qty négative
 				if (empty($obj->edbrowid)) {
-					// line without batch detail
-
-					// We decrement stock of product (and sub-products) -> update table llx_product_stock (key of this table is fk_product+fk_entrepot) and add a movement record
-					$result = $mouvS->livraison($user, $obj->fk_product, $obj->fk_entrepot, $qty, $obj->subprice, $langs->trans($labelmovement, $obj->ref));
-					if ($result < 0) {
-						$this->setErrorsFromObject($mouvS);
-						$error++;
-						break;
-					}
+					$result = $mouvS->livraison(
+						$user, 
+						$obj->fk_product, 
+						$obj->fk_entrepot, 
+						$qty, 
+						$obj->subprice, 
+						$langs->trans($labelmovement, $obj->ref),
+						$datem
+					);
 				} else {
-					// line with batch detail
-
-					// We decrement stock of product (and sub-products) -> update table llx_product_stock (key of this table is fk_product+fk_entrepot) and add a movement record
-					$result = $mouvS->livraison($user, $obj->fk_product, $obj->fk_entrepot, $qty, $obj->subprice, $langs->trans($labelmovement, $obj->ref), '', $this->db->jdate($obj->eatby), $this->db->jdate($obj->sellby), $obj->batch, $obj->fk_origin_stock);
-					if ($result < 0) {
-						$this->setErrorsFromObject($mouvS);
-						$error++;
-						break;
-					}
+					$result = $mouvS->livraison(
+						$user, 
+						$obj->fk_product, 
+						$obj->fk_entrepot, 
+						$qty, 
+						$obj->subprice, 
+						$langs->trans($labelmovement, $obj->ref), 
+						$datem,
+						$this->db->jdate($obj->eatby), 
+						$this->db->jdate($obj->sellby), 
+						$obj->batch, 
+						$obj->fk_origin_stock
+					);
 				}
 
-				// If some stock lines are now 0, we can remove entry into llx_product_stock, but only if there is no child lines into llx_product_batch (detail of batch, because we can imagine
-				// having a lot1/qty=X and lot2/qty=-X, so 0 but we must not loose repartition of different lot.
-				$sqldelete = "DELETE FROM ".$this->db->prefix()."product_stock WHERE reel = 0 AND rowid NOT IN (SELECT fk_product_stock FROM ".$this->db->prefix()."product_batch as pb)";
-				$resqldelete = $this->db->query($sqldelete);
-				// We do not test error, it can fails if there is child in batch details
+				if ($result < 0) {
+					dol_syslog(get_class($this) . "::manageStockMvtOnEvt ERROR from MouvementStock - errors = " . print_r($mouvS->errors, true), LOG_ERR);
+					$this->setErrorsFromObject($mouvS);
+					$error++;
+					break;
+				}
 			}
 		} else {
 			$this->error = $this->db->lasterror();
