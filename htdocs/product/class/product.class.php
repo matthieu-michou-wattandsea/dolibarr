@@ -981,47 +981,45 @@ class Product extends CommonObject
 		$this->price_min_ttc = (float) price2num($this->price_min_ttc);
 		$this->price_min = (float) price2num($this->price_min);
 		$this->price_label = trim($this->price_label);
-		if (empty($this->tva_tx)) {
+		if (!isset($this->tva_tx) || empty($this->tva_tx)) {
 			$this->tva_tx = 0;
 		}
-		if (empty($this->tva_npr)) {
+		if (!isset($this->tva_npr) || empty($this->tva_npr)) {
 			$this->tva_npr = 0;
 		}
 		// Local taxes
-		if (empty($this->localtax1_tx)) {
-			$this->localtax1_tx = 0;
+		if (empty($this->localtax1_tx)) {			$this->localtax1_tx = 0;
 		}
-		if (empty($this->localtax2_tx)) {
+		if (!isset($this->localtax2_tx) || empty($this->localtax2_tx)) {
 			$this->localtax2_tx = 0;
 		}
-		if (empty($this->localtax1_type)) {
+		if (!isset($this->localtax1_type) || empty($this->localtax1_type)) {
 			$this->localtax1_type = '0';
 		}
-		if (empty($this->localtax2_type)) {
+		if (!isset($this->localtax2_type) || empty($this->localtax2_type)) {
 			$this->localtax2_type = '0';
 		}
 		// Price
 		if (empty($this->price_base_type) && getDolGlobalString('PRODUCT_PRICE_BASE_TYPE')) {
 			$this->price_base_type = getDolGlobalString('PRODUCT_PRICE_BASE_TYPE');
 		}
-		if (empty($this->price)) {
-			$this->price = 0;
+		if (empty($this->price)) {			$this->price = 0;
 		}
-		if (empty($this->price_min)) {
+		if (!isset($this->price_min) || empty($this->price_min)) {
 			$this->price_min = 0;
 		}
 		// Price by quantity
-		if (empty($this->price_by_qty)) {
+		if (!isset($this->price_by_qty) || empty($this->price_by_qty)) {
 			$this->price_by_qty = 0;
 		}
 
-		if (empty($this->status)) {
+		if (!isset($this->status) || empty($this->status)) {
 			$this->status = 0;
 		}
-		if (empty($this->status_buy)) {
+		if (!isset($this->status_buy) || empty($this->status_buy)) {
 			$this->status_buy = 0;
 		}
-		if (empty($this->stockable_product)) {
+		if (!isset($this->stockable_product) || empty($this->stockable_product)) {
 			$this->stockable_product = 0;
 		}
 
@@ -2952,7 +2950,6 @@ class Product extends CommonObject
 			// when multiprices are enabled (level is 0 when they are not). So they must not be overwritten by another level.
 			// The vat columns are however shared by all levels, so they are always updated.
 			$updatedefaultprice = (empty($level) || $level == 1);
-
 			// Don't put quotes here on decimal numbers.
 			// This causes storage with base rounding instead of exact values.
 			$sql = "UPDATE ".$this->db->prefix()."product SET";
@@ -6664,9 +6661,9 @@ class Product extends CommonObject
 
 		// Stock Increase mode
 		if (getDolGlobalString('STOCK_CALCULATE_ON_RECEPTION') || getDolGlobalString('STOCK_CALCULATE_ON_RECEPTION_CLOSE')) {
-			$this->stock_theorique += ($stock_commande_fournisseur - $stock_reception_fournisseur);
+			$this->stock_theorique += max(0,$stock_commande_fournisseur - $stock_reception_fournisseur);
 		} elseif (getDolGlobalString('STOCK_CALCULATE_ON_SUPPLIER_DISPATCH_ORDER')) {	// This option is similar to STOCK_CALCULATE_ON_RECEPTION_CLOSE but when module Reception is not enabled
-			$this->stock_theorique += ($stock_commande_fournisseur - $stock_reception_fournisseur);
+			$this->stock_theorique += max(0,$stock_commande_fournisseur - $stock_reception_fournisseur);
 		} elseif (getDolGlobalString('STOCK_CALCULATE_ON_SUPPLIER_VALIDATE_ORDER')) {	// Warning: stock change "on approval", not on validation !
 			if (getDolGlobalString('STOCK_CALCULATE_ON_SUPPLIER_VALIDATE_ORDER_INCLUDE_DRAFT')) {	// By default, draft means "does not exist", so we do not include them by default, except if option is on
 				$tmpnewprod = dol_clone($this, 1);
