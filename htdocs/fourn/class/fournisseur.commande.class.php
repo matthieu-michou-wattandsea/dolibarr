@@ -1699,6 +1699,29 @@ class CommandeFournisseur extends CommonOrder
 					}
 
 					//$this->special_code = $line->special_code; // TODO : remove this in 9.0 and add special_code param to addline()
+					// PHP 8 fix : initialise les propriétés optionnelles qui peuvent être absentes du JSON API
+					$line->desc                    ??= '';
+					$line->subprice                ??= 0;
+					$line->qty                     ??= 0;
+					$line->tva_tx                  ??= 0;
+					$line->localtax1_tx            ??= 0;
+					$line->localtax2_tx            ??= 0;
+					$line->fk_product              ??= 0;
+					$line->ref_supplier            ??= '';
+					$line->ref_fourn               ??= '';
+					$line->remise_percent          ??= 0;
+					$line->product_type            ??= 0;
+					$line->info_bits               ??= 0;
+					$line->date_start              ??= '';
+					$line->date_end                ??= '';
+					$line->array_options           ??= [];
+					$line->fk_unit                 ??= 0;
+					$line->multicurrency_subprice  ??= 0;
+					$line->origin                  ??= '';
+					$line->origin_id               ??= 0;
+					$line->rang                    ??= 0;
+					$line->special_code            ??= 0;
+					$line->label                   ??= '';
 
 					// This include test on qty if option SUPPLIER_ORDER_WITH_NOPRICEDEFINED is not set
 					// Preserve the original entry mode of the line so the total is computed from the typed value (no rounding drift).
