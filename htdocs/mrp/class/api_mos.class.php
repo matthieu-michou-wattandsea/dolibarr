@@ -24,7 +24,6 @@ require_once DOL_DOCUMENT_ROOT.'/mrp/class/mo.class.php';
 require_once DOL_DOCUMENT_ROOT.'/categories/class/categorie.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/company.lib.php';
 
-
 /**
  * \file    htdocs/mrp/class/api_mos.class.php
  * \ingroup mrp
@@ -1128,4 +1127,309 @@ class Mos extends DolibarrApi
 			}
 		}
 	}
+
+        /**
+     * Consomme et produit toutes les lignes d'un ordre de fabrication (MO)
+     *
+     * Reproduit EXACTEMENT le comportement du bouton officiel "Consommer et produire tout"
+     * de mo_production.php :
+     * - Crée les mouvements de stock (livraison + réception)
+     * - Crée les lignes role='consumed' et role='produced'
+     * - Lie chaque ligne via fk_mrp_production (clé obligatoire pour que les quantités
+     *   consommées/produites apparaissent dans l'onglet Production)
+     * - Gère les lots/séries (batch)
+     * - Peut fermer automatiquement l'OF
+     *
+     * @url    POST {id}/produceandconsumeall2
+     *
+     * @param  int    $id             ID de l'ordre de fabrication (llx_mrp_mo.rowid)
+     * @param  array  $request_data   Corps JSON de la requête POST
+     *
+     * Structure attendue de $request_data :
+     * {
+     *   "arraytoconsume": [                     // composants à consommer
+     *     {
+     *       "objectid": 64,                     // product ID
+     *       "qty": 5,
+     *       "fk_warehouse": 1,
+     *       "batch": "LOT-COMP-001"             // obligatoire si produit géré en lot/série
+     *     }
+     *   ],
+     *   "arraytoproduce": [                     // produits finis à produire
+     *     {
+     *       "objectid": 46,
+     *       "qty": 1,
+     *       "fk_warehouse": 1,
+     *       "batch": "HPU-01-0009"
+     *     }
+     *   ],
+     *   "inventorylabel": "Production API",     // optionnel
+     *   "inventorycode":  "API",                // optionnel
+     *   "autoclose": true                       // défaut = true
+     * }
+     *
+     * @return array {
+     *   "success": true,
+     *   "mo_id": 40,
+     *   "message": "Quantités maintenant visibles"
+     * }
+     *
+     * @throws RestException 403 (droits insuffisants), 404 (MO inexistant),
+     *                        405 (statut invalide), 500 (erreur technique)
+     */
+    public function produceAndConsumeAll2($id, $request_data = null)
+    {
+        error_log("=== PRODUCEANDCONSUMEALL2 START - MO ID = " . $id . " ===");
+
+        if (empty($request_data) || !is_array($request_data)) {
+            $raw = @file_get_contents('php://input');
+            $request_data = json_decode($raw, true);
+        }
+
+        global $conf;
+
+        if (!DolibarrApiAccess::$user->hasRight('mrp', 'write')) {
+            throw new RestException(403, 'Not enough permission');
+        }
+
+        if (!$this->mo->fetch($id)) {
+            throw new RestException(404, 'MO not found');
+        }
+
+        if (!in_array($this->mo->status, [1, 2])) {
+            throw new RestException(405, 'MO must be validated or in progress');
+        }
+
+        require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
+        require_once DOL_DOCUMENT_ROOT.'/product/stock/class/mouvementstock.class.php';
+        require_once DOL_DOCUMENT_ROOT.'/product/stock/class/productlot.class.php';
+        require_once DOL_DOCUMENT_ROOT.'/mrp/class/moline.class.php';
+
+        $stockmove = new MouvementStock($this->db);
+        $stockmove->setOrigin('mo', $this->mo->id);
+
+        $label = $request_data['inventorylabel'] ?? 'Production API';
+        $code  = $request_data['inventorycode']  ?? 'API';
+        $autoclose = (int)($request_data['autoclose'] ?? 1);
+
+        $pos = 0;
+
+        $now = dol_now();
+        if (!empty($request_data['datem'])) {
+            $now = $request_data['datem'];
+        } elseif (!empty($request_data['date_creation'])) {
+            $now = $request_data['date_creation'];
+        } elseif (!empty($request_data['date'])) {
+            $now = $request_data['date'];
+        }
+
+        foreach (['arraytoconsume' => 'consumed', 'arraytoproduce' => 'produced'] as $key => $done_role) {
+            $orig_role = ($key === 'arraytoconsume') ? 'toconsume' : 'toproduce';
+
+            foreach ($request_data[$key] ?? [] as $item) {
+                $product_id = (int)$item['objectid'];
+                $qty        = (float)$item['qty'];
+                $warehouse  = (int)$item['fk_warehouse'];
+                $batch      = trim($item['batch'] ?? '');
+
+                $product = new Product($this->db);
+                $product->fetch($product_id);
+
+                // === 1. Trouver ID de la ligne originale (toconsume / toproduce) ===
+                $sql_orig = "SELECT rowid FROM " . MAIN_DB_PREFIX . "mrp_production 
+                            WHERE fk_mo = " . (int)$this->mo->id . "
+                              AND role = '" . $this->db->escape($orig_role) . "'
+                              AND fk_product = " . (int)$product_id . "
+                            ORDER BY position ASC, rowid ASC LIMIT 1";
+
+                $res_orig = $this->db->query($sql_orig);
+                $orig_id = 0;
+                if ($res_orig && $obj = $this->db->fetch_object($res_orig)) {
+                    $orig_id = (int)$obj->rowid;
+                }
+
+                error_log("   [ORIG] product={$product->ref} role={$orig_role} → orig_id={$orig_id}");
+
+                // Mouvement de stock
+                $id_batch = 0;
+                if ($batch && $product->status_batch > 0) {
+                    $lot = new Productlot($this->db);
+                    if ($lot->fetch(0, $product->id, $batch) > 0) {
+                        $id_batch = $lot->id;
+                    } else {
+                        $lot->fk_product = $product->id;
+                        $lot->batch = $batch;
+                        $lot->entity = $conf->entity;
+                        $id_batch = $lot->create(DolibarrApiAccess::$user);
+                    }
+                }
+
+                if ($key === 'arraytoconsume') {
+                    $moveid = $stockmove->livraison(DolibarrApiAccess::$user, $product->id, $warehouse, $qty, 0, $label, $now , '', '', $batch, $id_batch, $code);
+                } else {
+                    $moveid = $stockmove->reception(DolibarrApiAccess::$user, $product->id, $warehouse, $qty, 0, $label, '', '', $batch, $now , $id_batch, $code);
+                }
+
+                if ($moveid < 0) throw new RestException(500, $stockmove->error);
+
+                // === 2. Créer la ligne "done" avec le lien fk_mrp_production ===
+                $newline = new MoLine($this->db);
+                $newline->fk_mo             = $this->mo->id;
+                $newline->position          = $pos++;
+                $newline->fk_product        = $product->id;
+                $newline->fk_warehouse      = $warehouse;
+                $newline->qty               = $qty;
+                $newline->batch             = $batch;
+                $newline->role              = $done_role;
+                $newline->fk_mrp_production = $orig_id;   // ← C'EST ÇA QUI FAIT APPARAÎTRE LES QTES
+                $newline->date_creation      = $this->date_creation;
+                $newline->fk_stock_movement = $moveid;
+                $newline->fk_user_creat     = DolibarrApiAccess::$user->id;
+
+                $res = $newline->create(DolibarrApiAccess::$user);
+                error_log("   [CREATED] $done_role | orig_link=$orig_id | move=$moveid | result=$res");
+            }
+        }
+
+        if ($autoclose) {
+            $this->mo->setStatut(3, 0, '', 'MRP_MO_CLOSE');
+        }
+
+        error_log("=== PRODUCEANDCONSUMEALL2 SUCCESS ===");
+        return ['success' => true, 'mo_id' => $id, 'message' => 'Quantités maintenant visibles'];
+    }
+
+    /**
+     * Add a production line to a Manufacturing Order (MO)
+     * Support qty > 1 avec numéros de série : split automatique en N lignes qty=1
+     *
+     * @url POST {id}/lines
+     *
+     * @param int   $id             ID of MO
+     * @param array $request_data   Line data
+     *
+     * @return array
+     * @throws RestException 400|401|404|500
+     */
+    public function postLine($id, $request_data = null)
+    {
+        if (!DolibarrApiAccess::$user->hasRight("mrp", "write")) {
+            throw new RestException(401, 'Write permission required on MRP');
+        }
+
+        $result = $this->mo->fetch($id);
+        if (!$result) {
+            throw new RestException(404, 'MO not found');
+        }
+
+        require_once DOL_DOCUMENT_ROOT.'/mrp/class/moline.class.php';
+        require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
+
+        $product = new Product($this->db);
+        $product->fetch((int)($request_data['fk_product'] ?? 0));
+
+        $qty = price2num($request_data['qty'] ?? 0);
+        if ($qty <= 0) {
+            throw new RestException(400, 'qty must be > 0');
+        }
+
+        // ===================================================================
+        // 1. Normalisation du champ batch (string, tableau, JSON string)
+        // ===================================================================
+        $raw_batch = $request_data['batch'] ?? null;
+        $batch_list = [];
+
+        if ($raw_batch !== null && $raw_batch !== '' && $raw_batch !== []) {
+            if (is_string($raw_batch)) {
+                $raw_batch = trim($raw_batch);
+                // Cas : '["SN1","SN2"]' → JSON string
+                if ($raw_batch !== '' && $raw_batch[0] === '[' && substr($raw_batch, -1) === ']') {
+                    $decoded = json_decode($raw_batch, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $batch_list = $decoded;
+                    } else {
+                        $batch_list = [$raw_batch]; // fallback
+                    }
+                } else {
+                    $batch_list = [$raw_batch];
+                }
+            } elseif (is_array($raw_batch)) {
+                $batch_list = $raw_batch;
+            }
+
+            // Nettoyage final
+            $batch_list = array_map('trim', $batch_list);
+            $batch_list = array_filter($batch_list);
+            $batch_list = array_values($batch_list);
+        }
+
+        // ===================================================================
+        // 2. CAS NUMÉRO DE SÉRIE UNIQUE (status_batch = 2)
+        // ===================================================================
+        if ($product->status_batch == 2) {
+            if (count($batch_list) !== (int)$qty) {
+                throw new RestException(400, "Product {$product->ref} requires exactly {$qty} unique serial number(s). Got ".count($batch_list));
+            }
+            if (count($batch_list) !== count(array_unique($batch_list))) {
+                throw new RestException(400, 'Duplicate serial numbers not allowed');
+            }
+
+            // Création de N lignes qty=1
+            $created_lines = [];
+            foreach ($batch_list as $i => $single_batch) {
+                $line = new MoLine($this->db);
+                $line->fk_mo         = $this->mo->id;
+                $line->fk_product    = $product->id;
+                $line->qty           = 1;
+                $line->fk_warehouse  = !empty($request_data['fk_warehouse']) ? (int)$request_data['fk_warehouse'] : null;
+                $line->role          = $request_data['role'] ?? 'toconsume';
+                $line->description   = $request_data['description'] ?? '';
+                $line->position      = ((int)($request_data['position'] ?? 0)) + $i + 1;
+                $line->origin_type   = $request_data['origin_type'] ?? 'free';
+                $line->batch         = $single_batch;
+
+                $lineid = $line->create(DolibarrApiAccess::$user);
+                if ($lineid <= 0) {
+                    throw new RestException(500, "Error creating serial line: ".$line->error);
+                }
+                $created_lines[] = $lineid;
+            }
+
+            return [
+                'success' => [
+                    'code'      => 201,
+                    'message'   => "Created {$qty} lines (one per serial number)",
+                    'line_ids'  => $created_lines
+                ]
+            ];
+        }
+
+        // ===================================================================
+        // 3. CAS NORMAL (lots ou sans traçabilité)
+        // ===================================================================
+        $line = new MoLine($this->db);
+        $line->fk_mo         = $this->mo->id;
+        $line->fk_product    = $product->id;
+        $line->qty           = $qty;
+        $line->fk_warehouse  = !empty($request_data['fk_warehouse']) ? (int)$request_data['fk_warehouse'] : null;
+        $line->role          = $request_data['role'] ?? 'toconsume';
+        $line->description   = $request_data['description'] ?? '';
+        $line->position      = (int)($request_data['position'] ?? 0);
+        $line->origin_type   = $request_data['origin_type'] ?? 'free';
+        $line->batch         = !empty($batch_list) ? $batch_list[0] : null;
+
+        $lineid = $line->create(DolibarrApiAccess::$user);
+        if ($lineid <= 0) {
+            throw new RestException(500, 'Error creating line: '.$line->error);
+        }
+
+        return [
+            'success' => [
+                'code'     => 201,
+                'message'  => 'Line created successfully',
+                'line_id'  => $lineid
+            ]
+        ];
+    }
+
 }
