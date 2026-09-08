@@ -1,8 +1,7 @@
 <?php
 /* Copyright (C) 2017  		Laurent Destailleur <eldy@users.sourceforge.net>
  * Copyright (C) 2020  		Lenin Rivas		   	<lenin@leninrivas.com>
- * Copyright (C) 2023-2026  Frédéric France     <frederic.france@free.fr>
- * Copyright (C) 2024-2026	MDW					<mdeweerd@users.noreply.github.com>
+ * Copyright (C) 2023-2026  Frédéric France     <frederic.france@free.fr> * Copyright (C) 2024-2026	MDW					<mdeweerd@users.noreply.github.com>
  * Copyright (C) 2025		Noé Cendrier		<noe.cendrier@altairis.fr>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -1163,7 +1162,11 @@ class Mo extends CommonObject
 		 return -1;
 		 }*/
 
-		$now = dol_now();
+		// $now = dol_now();
+		$date_creation = dol_now();
+		if(!empty($this->date_creation)) {
+			$date_creation = $this->date_creation; 
+		}
 
 		$this->db->begin();
 
@@ -1180,7 +1183,7 @@ class Mo extends CommonObject
 		$sql = "UPDATE ".MAIN_DB_PREFIX.$this->table_element;
 		$sql .= " SET ref = '".$this->db->escape($num)."',";
 		$sql .= " status = ".self::STATUS_VALIDATED.",";
-		$sql .= " date_valid = '".$this->db->idate($now)."',";
+		$sql .= " date_valid = '".$this->db->idate($date_creation)."',";
 		$sql .= " fk_user_valid = ".((int) $user->id);
 		$sql .= " WHERE rowid = ".((int) $this->id);
 
