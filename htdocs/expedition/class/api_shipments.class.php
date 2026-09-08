@@ -211,62 +211,194 @@ class Shipments extends DolibarrApi
 		return $obj_ret;
 	}
 
+	// /**
+	//  * Create shipment object
+	//  *
+	//  * @param   array   $request_data   Request data
+	//  * @return  int     				ID of shipment created
+	//  */
+	// public function post($request_data = null)
+	// {
+	// 	if (!DolibarrApiAccess::$user->hasRight('expedition', 'creer')) {
+	// 		throw new RestException(403, "Insufficiant rights");
+	// 	}
+
+	// 	$result = $this->_validate($request_data);
+
+	// 	// 1. En-tête (sans lignes)
+	// 	foreach ($request_data as $field => $value) {
+	// 		if ($field === 'caller') {
+	// 			$this->shipment->context['caller'] = sanitizeVal($request_data['caller'], 'aZ09');
+	// 			continue;
+	// 		}
+	// 		if ($field !== 'lines') {
+	// 			$this->shipment->$field = $this->_checkValForAPI($field, $value, $this->shipment);
+	// 		}
+	// 	}
+
+	// 	$this->shipment->lines = [];
+	// 	$id = $this->shipment->create(DolibarrApiAccess::$user);
+	// 	if ($id < 0) {
+	// 		throw new RestException(500, "Error creating shipment header", array_merge(array($this->shipment->error), $this->shipment->errors));
+	// 	}
+
+
+
+	// 	// 2. Lignes + batches (comme le GUI)
+	// 	if (isset($request_data["lines"])) {
+	// 		foreach ($request_data["lines"] as $line) {
+	// 			$shipmentline = new ExpeditionLigne($this->db);
+
+	// 			$shipmentline->fk_expedition   = $id;
+	// 			$shipmentline->fk_product      = (int) $line['fk_product'];
+	// 			$shipmentline->entrepot_id     = (int) ($line['fk_entrepot'] ?? $line['entrepot_id'] ?? 0);
+
+	// 			// === LES DEUX LIGNES QUI RÉSOLVENT LE PROBLÈME D'AFFICHAGE ===
+	// 			$shipmentline->fk_element      = (int) ($line['origin_id'] ?? 0);           // id commande
+	// 			$shipmentline->fk_elementdet   = (int) ($line['origin_line_id'] ?? $line['fk_elementdet'] ?? 0);  // id ligne commande
+
+	// 			$shipmentline->origin_line_id  = $shipmentline->fk_elementdet;
+	// 			$shipmentline->origin_type     = $line['element_type'] ?? $line['origin_type'] ?? 'commande';
+	// 			$shipmentline->element_type    = $shipmentline->origin_type;
+	// 			$shipmentline->qty             = (float) $line['qty'];
+	// 			$shipmentline->rang            = (int) ($line['rang'] ?? 0);
+	// 			$shipmentline->array_options   = $line['array_options'] ?? [];
+	// 			$shipmentline->cost_price      = (float) ($line['cost_price'] ?? 0);
+
+	// 			// Insertion ligne
+	// 			$line_id = $shipmentline->insert(DolibarrApiAccess::$user);
+	// 			if ($line_id < 0) {
+	// 				throw new RestException(500, "Error creating line", array_merge(array($shipmentline->error), $shipmentline->errors));
+	// 			}
+
+	// 			// Batches
+	// 			$detail_batch = $line['detail_batch'] ?? null;
+	// 			if (is_array($detail_batch) && count($detail_batch) > 0) {
+	// 				foreach ($detail_batch as $b) {
+	// 					$batch = new ExpeditionLineBatch($this->db);
+	// 					$batch->fk_expeditiondet = $line_id;
+	// 					$batch->batch            = $b['batch'] ?? '';
+	// 					$batch->qty              = (float) ($b['qty'] ?? $shipmentline->qty);
+	// 					$batch->fk_warehouse     = (int) ($b['fk_warehouse'] ?? $shipmentline->entrepot_id);
+	// 					$batch->eatby            = !empty($b['eatby']) ? $b['eatby'] : null;
+	// 					$batch->sellby           = !empty($b['sellby']) ? $b['sellby'] : null;
+
+	// 					$batch->create($line_id, DolibarrApiAccess::$user);
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+
+	// 	$this->shipment->date_valid     =  $date;   // date de validation
+	// 	$this->shipment->date_expedition = $date;  // date d'expédition
+	// 	$this->shipment->date           =  $date;   // date du document
+	// 	$this->shipment->datem           =  $date;   // date du document
+	// 	$this->shipment->update($user); // Sauvegarde la date dans l'en-tête
+
+	// 	return $id;
+	// }
+	
 	/**
 	 * Create shipment object
 	 *
 	 * @param   array   $request_data   Request data
-	 * @phan-param ?array<string,string|array<string,string|array<string,string>>> $request_data
-	 * @phpstan-param ?array<string,string|array<string,string|array<string,string>>> $request_data
 	 * @return  int     				ID of shipment created
 	 */
 	public function post($request_data = null)
 	{
-		if (!DolibarrApiAccess::$user->hasRight('expedition', 'creer')) {
-			throw new RestException(403, "Insufficiant rights");
-		}
-		// Check mandatory fields
-		$result = $this->_validate($request_data);
+	    if (!DolibarrApiAccess::$user->hasRight('expedition', 'creer')) {
+	        throw new RestException(403, "Insufficiant rights");
+	    }
 
-		foreach ($request_data as $field => $value) {
-			if ($field === 'caller') {
-				// Add a mention of caller so on trigger called after action, we can filter to avoid a loop if we try to sync back again with the caller
-				$this->shipment->context['caller'] = sanitizeVal($request_data['caller'], 'aZ09');
-				continue;
-			}
+	    $result = $this->_validate($request_data);
 
-			$this->shipment->$field = $this->_checkValForAPI($field, $value, $this->shipment);
-		}
-		if (isset($request_data["lines"])) {
-			$lines = array();
-			foreach ($request_data["lines"] as $line) {
-				$shipmentline = new ExpeditionLigne($this->db);
+	    // 1. En-tête (sans lignes)
+	    foreach ($request_data as $field => $value) {
+	        if ($field === 'caller') {
+	            $this->shipment->context['caller'] = sanitizeVal($request_data['caller'], 'aZ09');
+	            continue;
+	        }
+	        if ($field !== 'lines') {
+	            $this->shipment->$field = $this->_checkValForAPI($field, $value, $this->shipment);
+	        }
+	    }
 
-				$shipmentline->entrepot_id = (int) $line['entrepot_id'];
-				$shipmentline->fk_element = (int) ($line['fk_element'] ?? $line['origin_id']);				// example: order id.  this->origin is 'commande'
-				$shipmentline->origin_line_id = (int) ($line['fk_elementdet'] ?? $line['origin_line_id']);	// example: order id
-				$shipmentline->fk_elementdet = (int) ($line['fk_elementdet'] ?? $line['origin_line_id']);	// example: order line id
-				$shipmentline->origin_type = $line['element_type'] ?? $line['origin_type'];			// example 'commande' or 'order'
-				$shipmentline->element_type = $line['element_type'] ?? $line['origin_type'];		// example 'commande' or 'order'
-				$shipmentline->qty = (float) $line['qty'];
-				$shipmentline->rang = (int) $line['rang'];
-				$array_options = $line['array_options'];
-				if (is_array($array_options)) {
-					$shipmentline->array_options = $array_options;
-				}
-				$detail_batch = $line['detail_batch'];
-				if (is_array($detail_batch) || is_object($detail_batch)) {
-					$shipmentline->detail_batch = $detail_batch;
-				}
-				$lines[] = $shipmentline;
-			}
-			$this->shipment->lines = $lines;
-		}
+	    $this->shipment->lines = [];
+	    $id = $this->shipment->create(DolibarrApiAccess::$user);
+	    if ($id < 0) {
+	        throw new RestException(500, "Error creating shipment header", array_merge(array($this->shipment->error), $this->shipment->errors));
+	    }
 
-		if ($this->shipment->create(DolibarrApiAccess::$user) < 0) {
-			throw new RestException(500, "Error creating shipment", array_merge(array($this->shipment->error), $this->shipment->errors));
-		}
+	    // 2. Lignes + batches (support échange positif/négatif)
+	    if (isset($request_data["lines"])) {
+	        foreach ($request_data["lines"] as $line) {
+	            $shipmentline = new ExpeditionLigne($this->db);
 
-		return $this->shipment->id;
+	            $shipmentline->fk_expedition   = $id;
+	            $shipmentline->fk_product      = (int) $line['fk_product'];
+	            $shipmentline->entrepot_id     = (int) ($line['fk_entrepot'] ?? $line['entrepot_id'] ?? 0);
+
+	            $qty = (float) $line['qty'];
+
+	            // === GESTION ÉCHANGE / RETOUR STANDALONE ===
+	            // Si la ligne est négative → on autorise le mode standalone (retour stock)
+	            // Si la ligne est positive → on garde le comportement normal (liée à une commande)
+	            $isNegativeLine = ($qty < 0);
+
+	            if ($isNegativeLine) {
+	                // Ligne négative = retour/correction stock (standalone)
+	                $shipmentline->fk_element      = 0;
+	                $shipmentline->fk_elementdet   = 0;
+	                $shipmentline->origin_line_id  = 0;
+	                $shipmentline->origin_type     = '';
+	                $shipmentline->element_type    = '';
+	            } else {
+	                // Ligne positive = expédition classique
+	                $shipmentline->fk_element      = (int) ($line['origin_id'] ?? $line['fk_element'] ?? 0);
+	                $shipmentline->fk_elementdet   = (int) ($line['origin_line_id'] ?? $line['fk_elementdet'] ?? 0);
+	                $shipmentline->origin_line_id  = $shipmentline->fk_elementdet;
+	                $shipmentline->origin_type     = $line['element_type'] ?? $line['origin_type'] ?? 'commande';
+	                $shipmentline->element_type    = $shipmentline->origin_type;
+	            }
+
+	            $shipmentline->qty             = $qty;
+	            $shipmentline->rang            = (int) ($line['rang'] ?? 0);
+	            $shipmentline->array_options   = $line['array_options'] ?? [];
+	            $shipmentline->cost_price      = (float) ($line['cost_price'] ?? 0);
+
+	            // Insertion ligne
+	            $line_id = $shipmentline->insert(DolibarrApiAccess::$user);
+	            if ($line_id < 0) {
+	                throw new RestException(500, "Error creating line", array_merge(array($shipmentline->error), $shipmentline->errors));
+	            }
+
+	            // === Batches (gère qty positive ou négative) ===
+	            $detail_batch = $line['detail_batch'] ?? null;
+	            if (is_array($detail_batch) && count($detail_batch) > 0) {
+	                foreach ($detail_batch as $b) {
+	                    $batch = new ExpeditionLineBatch($this->db);
+	                    $batch->fk_expeditiondet = $line_id;
+	                    $batch->batch            = $b['batch'] ?? '';
+	                    $batch->qty              = (float) ($b['qty'] ?? $qty);           // peut être négatif
+	                    $batch->fk_warehouse     = (int) ($b['fk_warehouse'] ?? $shipmentline->entrepot_id);
+	                    $batch->eatby            = !empty($b['eatby']) ? $b['eatby'] : null;
+	                    $batch->sellby           = !empty($b['sellby']) ? $b['sellby'] : null;
+
+	                    $batch->create($line_id, DolibarrApiAccess::$user);
+	                }
+	            }
+	        }
+	    }
+
+	    // Mise à jour des dates
+	    $date = dol_now();
+	    $this->shipment->date_valid     = $date;
+	    $this->shipment->date_expedition = $date;
+	    $this->shipment->date           = $date;
+	    $this->shipment->datem          = $date;
+	    $this->shipment->update(DolibarrApiAccess::$user);
+
+	    return $id;
 	}
 
 	// /**
@@ -604,7 +736,12 @@ class Shipments extends DolibarrApi
 			throw new RestException(304, 'Error nothing done. May be object is already validated');
 		}
 		if ($result < 0) {
-			throw new RestException(500, 'Error when validating Shipment: '.$this->shipment->error);
+			// On remonte TOUTES les erreurs (y compris celles de MouvementStock)
+			$errorMessage = $this->shipment->error;
+			if (!empty($this->shipment->errors)) {
+				$errorMessage .= (empty($errorMessage) ? '' : ' | ') . implode(' | ', $this->shipment->errors);
+			}
+			throw new RestException(500, 'Error when validating Shipment: ' . $errorMessage);
 		}
 
 		// Reload shipment
@@ -809,3 +946,5 @@ class Shipments extends DolibarrApi
 		return $shipment;
 	}
 }
+
+	
