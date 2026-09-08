@@ -20,6 +20,7 @@
 
 use Luracast\Restler\RestException;
 
+require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.commande.class.php';
 require_once DOL_DOCUMENT_ROOT.'/reception/class/reception.class.php';
 require_once DOL_DOCUMENT_ROOT.'/reception/class/receptionlinebatch.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/company.lib.php';
@@ -231,26 +232,35 @@ class Receptions extends DolibarrApi
 			foreach ($request_data["lines"] as $line) {
 				$receptionline = new ReceptionLineBatch($this->db);
 
-				$receptionline->fk_product = $line['fk_product'];
-				$receptionline->fk_entrepot = $line['fk_entrepot'];
-				$receptionline->fk_element = $line['fk_element'] ?? $line['origin_id'];				// example: purchase order id.  this->origin is 'supplier_order'
-				$receptionline->origin_line_id = $line['fk_elementdet'] ?? $line['origin_line_id'];	// example: purchase order id
-				$receptionline->fk_elementdet = $line['fk_elementdet'] ?? $line['origin_line_id'];	// example: purchase order line id
-				$receptionline->origin_type = $line['element_type'] ?? $line['origin_type'];		// example 'supplier_order'
-				$receptionline->element_type = $line['element_type'] ?? $line['origin_type'];		// example 'supplier_order'
-				$receptionline->qty = $line['qty'];
-				//$receptionline->rang = $line['rang'];
-				$receptionline->array_options = $line['array_options'];
-				$receptionline->batch = $line['batch'];
-				$receptionline->eatby = $line['eatby'];
-				$receptionline->sellby = $line['sellby'];
-				$receptionline->cost_price = $line['cost_price'];
-				$receptionline->status = $line['status'];
+				// PHP 8 fix : accès safe aux clés (undefined array key warning + propriétés optionnelles)
+				$receptionline->fk_product     = $line['fk_product']     ?? 0;
+				$receptionline->fk_entrepot    = $line['fk_entrepot']    ?? 0;
+				$receptionline->fk_element     = $line['fk_element']     ?? $line['origin_id']     ?? 0;
+				$receptionline->origin_line_id = $line['fk_elementdet']  ?? $line['origin_line_id'] ?? 0;
+				$receptionline->fk_elementdet  = $line['fk_elementdet']  ?? $line['origin_line_id'] ?? 0;
+				$receptionline->origin_type    = $line['element_type']   ?? $line['origin_type']   ?? '';
+				$receptionline->element_type   = $line['element_type']   ?? $line['origin_type']   ?? '';
+				$receptionline->qty            = $line['qty']            ?? 0;
+				//$receptionline->rang         = $line['rang'] ?? 0;
+				$receptionline->array_options  = $line['array_options']  ?? [];
+				$receptionline->batch          = $line['batch']          ?? '';
+				$receptionline->eatby          = $line['eatby']          ?? '';
+				$receptionline->sellby         = $line['sellby']         ?? '';
+				$receptionline->cost_price     = $line['cost_price']     ?? 0;
+				$receptionline->status         = $line['status']         ?? 0;
 
 				$lines[] = $receptionline;
 			}
 			$this->reception->lines = $lines;
 		}
+
+		// PHP 8 fix : initialise les propriétés optionnelles du reception principal (sinon undefined property dans create())
+		$this->reception->date_delivery ??= '';
+		$this->reception->note_private  ??= '';
+		$this->reception->note_public   ??= '';
+		$this->reception->fk_statut     ??= 0;
+		$this->reception->statut        ??= 0;   // selon version
+		// ajoute ici les autres champs qui déclenchent le warning dans Reception::create()
 
 		if ($this->reception->create(DolibarrApiAccess::$user) < 0) {
 			throw new RestException(500, "Error creating reception", array_merge(array($this->reception->error), $this->reception->errors));
@@ -605,21 +615,21 @@ class Receptions extends DolibarrApi
 	}
 
 
-	// /**
-	//  *  Classify the reception as invoiced
-	//  *
-	//  * @param int   $id           Id of the reception
-	//  *
-	//  * @url     POST {id}/setinvoiced
-	//  *
-	//  * @return int
-	//  *
-	//  * @throws RestException 400
-	//  * @throws RestException 401
-	//  * @throws RestException 404
-	//  * @throws RestException 405
-	//  */
-	/*
+	/**
+	 *  Classify the reception as invoiced
+	 *
+	 * @param int   $id           Id of the reception
+	 *
+	 * @url     POST {id}/setinvoiced
+	 *
+	 * @return int
+	 *
+	 * @throws RestException 400
+	 * @throws RestException 401
+	 * @throws RestException 404
+	 * @throws RestException 405
+	 */
+	
 	public function setinvoiced($id)
 	{
 
@@ -634,13 +644,13 @@ class Receptions extends DolibarrApi
 				throw new RestException(404, 'Reception not found');
 		}
 
-		$result = $this->reception->classifyBilled(DolibarrApiAccess::$user);
+		$result = $this->reception->setBilled(DolibarrApiAccess::$user);
 		if ($result < 0) {
 				throw new RestException(400, $this->reception->error);
 		}
 		return $result;
 	}
-	*/
+	
 
 
 	//  /**
