@@ -1171,6 +1171,10 @@ class Propal extends CommonObject
 
 		$now = dol_now();
 
+		if (empty($this->date_creation)) {
+		    $this->date_creation = $now;
+		}
+
 		// Clean parameters
 		if (empty($this->date)) {
 			$this->date = $this->datep;
@@ -1269,7 +1273,7 @@ class Propal extends CommonObject
 		$sql .= ", 0";
 		$sql .= ", 0";
 		$sql .= ", '".$this->db->idate($this->date)."'";
-		$sql .= ", '".$this->db->idate($now)."'";
+		$sql .= ", '".$this->db->idate($this->date_creation)."'";
 		$sql .= ", '(PROV)'";
 		$sql .= ", ".($user->id > 0 ? ((int) $user->id) : "NULL");
 		$sql .= ", '".$this->db->escape($this->note_private)."'";
