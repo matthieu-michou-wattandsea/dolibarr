@@ -638,7 +638,8 @@ class ExternalModules
 					$remoteModuleName = preg_replace('/-' . preg_quote($remoteVersion, '/') . '$/', '', $remoteModuleName);
 					if (!empty($installedModules[$remoteModuleName]) && $remoteVersion && $remoteVersion != 'unknown') {
 						$localVersion = $installedModules[$remoteModuleName];
-						if ($localVersion && $localVersion != 'unknown') {
+						// $localVersion is guaranteed non-empty here (see !empty() test above), so only the 'unknown' value must be excluded
+						if ($localVersion != 'unknown') {
 							$versionDiff = $this->versionCompare($localVersion, $remoteVersion);
 							if ($versionDiff < 0) {
 								$buttonLabel = $langs->trans("Upgrade");
@@ -766,7 +767,7 @@ class ExternalModules
 			var confirmTitle = button.data("confirm-title");
 			var confirmText = button.data("confirm-text");
 			var buttons = {};
-			buttons[button.data("confirm-label")||"' . $confirmLabel . '"] = function(){
+			buttons[button.data("confirm-label")||\'' . $confirmLabel . '\'] = function(){
 				var form = $("<form method=\'POST\' style=\'display:none\'>").attr("action", button.data("url"));
 				$.each(button.data("fields"), function(name, value){
 					form.append($("<input type=\'hidden\'>").attr("name", name).val(value));
@@ -775,7 +776,7 @@ class ExternalModules
 				form.submit();
 				$(this).dialog("close");
 			};
-			buttons["' . $cancelLabel . '"] = function(){$(this).dialog("close");};
+			buttons[\'' . $cancelLabel . '\'] = function(){$(this).dialog("close");};
 			$("<div>").html(confirmText).dialog({
 				title: confirmTitle,
 				minWidth: 580,
