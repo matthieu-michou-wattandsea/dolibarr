@@ -1031,7 +1031,9 @@ class Commande extends CommonOrder
 			return -1;
 		}
 
-		$this->date_creation = dol_now();
+		if (empty($this->date_creation) || $this->date_creation <= 0) {
+			$this->date_creation = dol_now();
+		}
 
 		$this->db->begin();
 
