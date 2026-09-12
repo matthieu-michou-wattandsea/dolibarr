@@ -2112,7 +2112,7 @@ class CommandeFournisseur extends CommonOrder
 			$this->db->begin();
 
 			$product_type = $type;
-			$label = '';	// deprecated
+			//$label = '';	// deprecated
 
 			if ($fk_product > 0) {
 				if (getDolGlobalInt('SUPPLIER_ORDER_WITH_PREDEFINED_PRICES_ONLY') == 1) {	// Not the common case

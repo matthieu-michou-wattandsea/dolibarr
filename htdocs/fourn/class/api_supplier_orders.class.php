@@ -366,6 +366,7 @@ class SupplierOrders extends DolibarrApi
 		$request_data = (object) $request_data;
 
 		$request_data->desc = sanitizeVal($request_data->desc, 'restricthtml');
+		$request_data->label = sanitizeVal($request_data->label);
 
 		$updateRes = $this->order->addline(
 			$request_data->desc,
@@ -391,7 +392,8 @@ class SupplierOrders extends DolibarrApi
 			$request_data->origin,
 			$request_data->origin_id,
 			$request_data->rang,
-			$request_data->special_code
+			$request_data->special_code,
+			$request_data->label
 		);
 
 		if ($updateRes > 0) {

@@ -767,6 +767,7 @@ class SupplierInvoices extends DolibarrApi
 
 		$request_data->description = sanitizeVal($request_data->description, 'restricthtml');
 		$request_data->ref_supplier = sanitizeVal($request_data->ref_supplier);
+		$request_data->label = sanitizeVal($request_data->label);
 
 		$updateRes = $this->invoice->addline(
 			$request_data->description,
@@ -790,7 +791,11 @@ class SupplierInvoices extends DolibarrApi
 			$request_data->origin_id,
 			$request_data->multicurrency_subprice,
 			$request_data->ref_supplier,
-			$request_data->special_code
+			$request_data->special_code,
+			0,
+			0,
+			'',
+			$request_data->label
 		);
 
 		if ($updateRes < 0) {
