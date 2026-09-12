@@ -417,6 +417,14 @@ class FactureFournisseur extends CommonInvoice
 		if (empty($this->date)) {
 			$this->date = $now;
 		}
+		if (empty($this->date_creation) || $this->date_creation <= 0) {
+			if (!empty($this->datec) && $this->datec > 0) {
+				$this->date_creation = $this->datec;
+			} else {
+				$this->date_creation = $now;
+			}
+		}
+		$this->datec = $this->date_creation;
 
 		// Multicurrency (test on $this->multicurrency_tx because we should take the default rate only if not using origin rate)
 		if (!empty($this->multicurrency_code) && empty($this->multicurrency_tx)) {
@@ -589,7 +597,7 @@ class FactureFournisseur extends CommonInvoice
 		$sql .= ", ".(isset($this->subtype) ? (int) $this->subtype : "null");
 		$sql .= ", '".$this->db->escape(isset($this->label) ? $this->label : (isset($this->libelle) ? $this->libelle : ''))."'";
 		$sql .= ", ".((int) $this->socid);
-		$sql .= ", '".$this->db->idate($now)."'";
+		$sql .= ", '".$this->db->idate($this->date_creation)."'";
 		$sql .= ", '".$this->db->idate($this->date)."'";
 		$sql .= ", ".($this->vat_reverse_charge != '' ? ((int) $this->vat_reverse_charge) : 0);
 		$sql .= ", ".($this->fk_project > 0 ? ((int) $this->fk_project) : "null");

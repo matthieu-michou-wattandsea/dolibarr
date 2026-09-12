@@ -1040,6 +1040,332 @@ class Mos extends DolibarrApi
 		return $this->mo->id;
 	}
 
+		/**
+	 * Consume and produce MO lines (custom Watt And Sea).
+	 * Same idea as W24 produceAndConsumeAll2:
+	 * stock movements + MoLine role consumed/produced linked with fk_mrp_production.
+	 * Honours datem / date_creation / date for movement date (LMB import).
+	 *
+	 * @param	int		$id				MO id
+	 * @param	array	$request_data	Request body
+	 * @return	array{success:bool,mo_id:int,message:string}
+	 *
+	 * @url	POST {id}/produceandconsumeall2
+	 *
+	 * @throws RestException 400
+	 * @throws RestException 403
+	 * @throws RestException 404
+	 * @throws RestException 405
+	 * @throws RestException 500
+	 */
+	public function produceAndConsumeAll2($id, $request_data = null)
+	{
+		if (empty($request_data) || !is_array($request_data)) {
+			$raw = @file_get_contents('php://input');
+			$decoded = json_decode((string) $raw, true);
+			$request_data = is_array($decoded) ? $decoded : array();
+		}
+
+		global $conf;
+
+		if (!DolibarrApiAccess::$user->hasRight('mrp', 'write')) {
+			throw new RestException(403, 'Not enough permission');
+		}
+
+		$result = $this->mo->fetch($id);
+		if (!$result) {
+			throw new RestException(404, 'MO not found');
+		}
+
+		if ($this->mo->status != Mo::STATUS_VALIDATED && $this->mo->status != Mo::STATUS_INPROGRESS) {
+			throw new RestException(405, 'MO must be validated or in progress');
+		}
+
+		require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
+		require_once DOL_DOCUMENT_ROOT.'/product/stock/class/mouvementstock.class.php';
+		require_once DOL_DOCUMENT_ROOT.'/product/stock/class/productlot.class.php';
+		require_once DOL_DOCUMENT_ROOT.'/mrp/class/moline.class.php';
+
+		$stockmove = new MouvementStock($this->db);
+		$stockmove->setOrigin('mo', $this->mo->id);
+
+		$label = $request_data['inventorylabel'] ?? 'Production API';
+		$code = $request_data['inventorycode'] ?? 'API';
+		$autoclose = (int) ($request_data['autoclose'] ?? 1);
+
+		$now = dol_now();
+		if (!empty($request_data['datem'])) {
+			$now = $request_data['datem'];
+		} elseif (!empty($request_data['date_creation'])) {
+			$now = $request_data['date_creation'];
+		} elseif (!empty($request_data['date'])) {
+			$now = $request_data['date'];
+		}
+		$now = (int) $now;
+
+		$pos = 0;
+
+		$this->db->begin();
+
+		try {
+			foreach (array('arraytoconsume' => 'consumed', 'arraytoproduce' => 'produced') as $key => $done_role) {
+				$orig_role = ($key === 'arraytoconsume') ? 'toconsume' : 'toproduce';
+
+				foreach ($request_data[$key] ?? array() as $item) {
+					if (!is_array($item) || empty($item['objectid'])) {
+						throw new RestException(400, 'objectid missing in '.$key);
+					}
+
+					$product_id = (int) $item['objectid'];
+					$qty = (float) ($item['qty'] ?? 0);
+					$warehouse = (int) ($item['fk_warehouse'] ?? 0);
+					$batch = trim((string) ($item['batch'] ?? ''));
+
+					if ($qty == 0) {
+						continue;
+					}
+					if ($warehouse <= 0) {
+						throw new RestException(400, 'fk_warehouse missing for product '.$product_id);
+					}
+
+					$product = new Product($this->db);
+					if ($product->fetch($product_id) <= 0) {
+						throw new RestException(404, 'Product '.$product_id.' not found');
+					}
+
+					$sql_orig = "SELECT rowid FROM ".MAIN_DB_PREFIX."mrp_production";
+					$sql_orig .= " WHERE fk_mo = ".((int) $this->mo->id);
+					$sql_orig .= " AND role = '".$this->db->escape($orig_role)."'";
+					$sql_orig .= " AND fk_product = ".((int) $product_id);
+					$sql_orig .= " ORDER BY position ASC, rowid ASC LIMIT 1";
+
+					$orig_id = 0;
+					$res_orig = $this->db->query($sql_orig);
+					if ($res_orig && ($obj = $this->db->fetch_object($res_orig))) {
+						$orig_id = (int) $obj->rowid;
+					}
+
+					$id_batch = 0;
+					if ($batch !== '' && !empty($product->status_batch)) {
+						$lot = new Productlot($this->db);
+						if ($lot->fetch(0, $product->id, $batch) > 0) {
+							$id_batch = $lot->id;
+						} else {
+							$lot->fk_product = $product->id;
+							$lot->batch = $batch;
+							$lot->entity = $conf->entity;
+							$id_batch = $lot->create(DolibarrApiAccess::$user);
+							if ($id_batch < 0) {
+								throw new RestException(500, $lot->error ? $lot->error : 'Error creating product lot');
+							}
+						}
+					}
+
+					if ($key === 'arraytoconsume') {
+						$moveid = $stockmove->livraison(
+							DolibarrApiAccess::$user,
+							$product->id,
+							$warehouse,
+							$qty,
+							0,
+							$label,
+							$now,
+							'',
+							'',
+							$batch,
+							$id_batch,
+							$code
+						);
+					} else {
+						$moveid = $stockmove->reception(
+							DolibarrApiAccess::$user,
+							$product->id,
+							$warehouse,
+							$qty,
+							0,
+							$label,
+							'',
+							'',
+							$batch,
+							$now,
+							$id_batch,
+							$code
+						);
+					}
+
+					if ($moveid < 0) {
+						throw new RestException(500, $stockmove->error ? $stockmove->error : 'Stock movement failed');
+					}
+
+					$newline = new MoLine($this->db);
+					$newline->fk_mo = $this->mo->id;
+					$newline->position = $pos++;
+					$newline->fk_product = $product->id;
+					$newline->fk_warehouse = $warehouse;
+					$newline->qty = $qty;
+					$newline->batch = $batch;
+					$newline->role = $done_role;
+					$newline->fk_mrp_production = $orig_id;
+					$newline->date_creation = $now;
+					$newline->fk_stock_movement = $moveid;
+					$newline->fk_user_creat = DolibarrApiAccess::$user->id;
+
+					$res = $newline->create(DolibarrApiAccess::$user);
+					if ($res <= 0) {
+						throw new RestException(500, $newline->error ? $newline->error : 'Error creating MO line');
+					}
+				}
+			}
+
+			if ($autoclose) {
+				$retclose = $this->mo->setStatut(Mo::STATUS_PRODUCED, 0, '', 'MRP_MO_PRODUCED');
+				if ($retclose <= 0) {
+					throw new RestException(500, $this->mo->error ? $this->mo->error : 'Error closing MO');
+				}
+			}
+
+			$this->db->commit();
+		} catch (RestException $e) {
+			$this->db->rollback();
+			throw $e;
+		} catch (Exception $e) {
+			$this->db->rollback();
+			throw new RestException(500, $e->getMessage());
+		}
+
+		return array(
+			'success' => true,
+			'mo_id' => (int) $id,
+			'message' => 'Quantités maintenant visibles',
+		);
+	}
+
+	/**
+	 * Add a production line to a MO (needed by A13).
+	 * If several serials are given, one line qty=1 per serial.
+	 *
+	 * @param	int		$id				MO id
+	 * @param	array	$request_data	Line data
+	 * @return	array
+	 *
+	 * @url	POST {id}/lines
+	 *
+	 * @throws RestException 400
+	 * @throws RestException 403
+	 * @throws RestException 404
+	 * @throws RestException 500
+	 */
+	public function postLine($id, $request_data = null)
+	{
+		if (!DolibarrApiAccess::$user->hasRight('mrp', 'write')) {
+			throw new RestException(403, 'Write permission required on MRP');
+		}
+
+		if (empty($request_data) || !is_array($request_data)) {
+			$raw = @file_get_contents('php://input');
+			$decoded = json_decode((string) $raw, true);
+			$request_data = is_array($decoded) ? $decoded : array();
+		}
+
+		$result = $this->mo->fetch($id);
+		if (!$result) {
+			throw new RestException(404, 'MO not found');
+		}
+
+		require_once DOL_DOCUMENT_ROOT.'/mrp/class/moline.class.php';
+		require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
+
+		$fk_product = (int) ($request_data['fk_product'] ?? 0);
+		$product = new Product($this->db);
+		if ($fk_product <= 0 || $product->fetch($fk_product) <= 0) {
+			throw new RestException(400, 'fk_product invalid');
+		}
+
+		$qty = (float) price2num($request_data['qty'] ?? 0);
+		if ($qty <= 0) {
+			throw new RestException(400, 'qty must be > 0');
+		}
+
+		$raw_batch = $request_data['batch'] ?? null;
+		$batch_list = array();
+		if ($raw_batch !== null && $raw_batch !== '' && $raw_batch !== array()) {
+			if (is_string($raw_batch)) {
+				$raw_batch = trim($raw_batch);
+				if ($raw_batch !== '' && $raw_batch[0] === '[' && substr($raw_batch, -1) === ']') {
+					$decoded = json_decode($raw_batch, true);
+					$batch_list = (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : array($raw_batch);
+				} else {
+					$batch_list = array($raw_batch);
+				}
+			} elseif (is_array($raw_batch)) {
+				$batch_list = $raw_batch;
+			}
+			$batch_list = array_values(array_filter(array_map(static function ($v) {
+				return trim((string) $v);
+			}, $batch_list)));
+		}
+
+		$fk_warehouse = !empty($request_data['fk_warehouse']) ? (int) $request_data['fk_warehouse'] : null;
+		$role = $request_data['role'] ?? 'toconsume';
+		$description = $request_data['description'] ?? '';
+		$origin_type = $request_data['origin_type'] ?? 'free';
+		$basepos = (int) ($request_data['position'] ?? 0);
+
+		$created_lines = array();
+
+		if (count($batch_list) > 1 || (!empty($product->status_batch) && count($batch_list) === (int) $qty && $qty > 1)) {
+			foreach ($batch_list as $i => $single_batch) {
+				$line = new MoLine($this->db);
+				$line->fk_mo = $this->mo->id;
+				$line->fk_product = $product->id;
+				$line->qty = 1;
+				$line->fk_warehouse = $fk_warehouse;
+				$line->role = $role;
+				$line->description = $description;
+				$line->position = $basepos + $i + 1;
+				$line->origin_type = $origin_type;
+				$line->batch = $single_batch;
+				$lineid = $line->create(DolibarrApiAccess::$user);
+				if ($lineid <= 0) {
+					throw new RestException(500, 'Error creating serial line: '.$line->error);
+				}
+				$created_lines[] = $lineid;
+			}
+
+			return array(
+				'success' => array(
+					'code' => 201,
+					'message' => 'Created '.count($created_lines).' lines (one per serial number)',
+					'line_ids' => $created_lines,
+				),
+			);
+		}
+
+		$line = new MoLine($this->db);
+		$line->fk_mo = $this->mo->id;
+		$line->fk_product = $product->id;
+		$line->qty = $qty;
+		$line->fk_warehouse = $fk_warehouse;
+		$line->role = $role;
+		$line->description = $description;
+		$line->position = $basepos;
+		$line->origin_type = $origin_type;
+		$line->batch = !empty($batch_list) ? $batch_list[0] : null;
+
+		$lineid = $line->create(DolibarrApiAccess::$user);
+		if ($lineid <= 0) {
+			throw new RestException(500, 'Error creating line: '.$line->error);
+		}
+
+		return array(
+			'success' => array(
+				'code' => 201,
+				'message' => 'Line created successfully',
+				'line_id' => $lineid,
+			),
+		);
+	}
+
 
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.PublicUnderscore
 	/**
