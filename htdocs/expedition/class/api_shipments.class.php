@@ -253,9 +253,23 @@ class Shipments extends DolibarrApi
 				if (is_array($array_options)) {
 					$shipmentline->array_options = $array_options;
 				}
-				$detail_batch = $line['detail_batch'];
-				if (is_array($detail_batch) || is_object($detail_batch)) {
-					$shipmentline->detail_batch = $detail_batch;
+				// $detail_batch = $line['detail_batch'];
+				// if (is_array($detail_batch) || is_object($detail_batch)) {
+				// 	$shipmentline->detail_batch = $detail_batch;
+				// }
+				$detail_batch = $line['detail_batch'] ?? null;
+				if (is_array($detail_batch) && count($detail_batch) > 0) {
+					require_once DOL_DOCUMENT_ROOT.'/expedition/class/expeditionlinebatch.class.php';
+					$objs = array();
+					foreach ($detail_batch as $b) {
+						$src = is_array($b) ? $b : (array) $b;
+						$batch = new ExpeditionLineBatch($this->db);
+						$batch->batch = $src['batch'] ?? '';
+						$batch->qty = (float) ($src['qty'] ?? $line['qty'] ?? 0);
+						$batch->fk_warehouse = (int) ($src['fk_warehouse'] ?? $line['entrepot_id'] ?? 0);
+						$objs[] = $batch;
+					}
+					$shipmentline->detail_batch = $objs;
 				}
 				$lines[] = $shipmentline;
 			}
