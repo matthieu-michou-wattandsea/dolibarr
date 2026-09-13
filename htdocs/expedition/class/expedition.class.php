@@ -3073,12 +3073,16 @@ class Expedition extends CommonObject
 
 		$langs->load("agenda");
 
+		if (empty($datemvt) && !empty($this->date_shipping)) {
+		    $datemvt = $this->date_shipping;
+		}
 		if (empty($datemvt)) {
 			$datemvt = $this->date_expedition;
 		}
 		if (empty($datemvt)) {
 			$datemvt = $this->date_creation;
 		}
+
 
 		// Loop on each product line to add a stock movement
 		$sql = "SELECT";
@@ -3105,7 +3109,10 @@ class Expedition extends CommonObject
 				} else {
 					$qty = $obj->edbqty;
 				}
-				if ($qty <= 0 || ($qty < 0 && !getDolGlobalInt('SHIPMENT_ALLOW_NEGATIVE_QTY'))) {
+				if ($qty == 0) {
+					continue;
+				}
+				if ($qty < 0 && !getDolGlobalInt('SHIPMENT_ALLOW_NEGATIVE_QTY')) {
 					continue;
 				}
 				dol_syslog(get_class($this) . "::valid movement index " . $i . " ed.rowid=" . $obj->edid . " edb.rowid=" . $obj->edbrowid);
