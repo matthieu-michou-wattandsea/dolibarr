@@ -1207,7 +1207,7 @@ class Mos extends DolibarrApi
 					$newline->role = $done_role;
 					$newline->fk_mrp_production = $orig_id;
 					$newline->date_creation = $now;
-					$newline->fk_stock_movement = $moveid;
+					$newline->fk_stock_movement = ($moveid > 0) ? $moveid : null;
 					$newline->fk_user_creat = DolibarrApiAccess::$user->id;
 
 					$res = $newline->create(DolibarrApiAccess::$user);
