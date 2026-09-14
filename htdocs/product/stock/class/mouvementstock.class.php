@@ -351,6 +351,8 @@ class MouvementStock extends CommonObject
 			if (empty($batch)) {
 				$langs->load("errors");
 				$this->errors[] = $langs->transnoentitiesnoconv("ErrorTryToMakeMoveOnProductRequiringBatchData", $product->ref);
+				$this->error = $msg;
+				$this->errors[] = $msg;
 				dol_syslog("Try to make a movement of a product with status_batch on without any batch data", LOG_ERR);
 
 				$this->db->rollback();
@@ -698,6 +700,8 @@ class MouvementStock extends CommonObject
 					if ($this->getBatchCount($fk_product, (string) $batch) > 1) {
 						$error++;
 						$this->errors[] = $langs->trans("TooManyQtyForSerialNumber", $product->ref, (string) $batch);
+						$this->error = $msg;
+						$this->errors[] = $msg;
 					}
 				}
 			}
