@@ -249,6 +249,9 @@ class Shipments extends DolibarrApi
 				$shipmentline->element_type = $line['element_type'] ?? $line['origin_type'];		// example 'commande' or 'order'
 				$shipmentline->qty = (float) $line['qty'];
 				$shipmentline->rang = (int) $line['rang'];
+				if (!empty($line['fk_product'])) {
+					$shipmentline->fk_product = (int) $line['fk_product'];
+				}
 				$array_options = $line['array_options'];
 				if (is_array($array_options)) {
 					$shipmentline->array_options = $array_options;
