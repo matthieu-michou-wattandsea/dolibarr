@@ -814,7 +814,7 @@ class Expedition extends CommonObject
 		}
 		// create shipment lines
 		foreach ($stockLocationQty as $stockLocation => $qty) {
-			$line_id = $this->create_line($stockLocation, $line_ext->origin_line_id, $qty, $line_ext->rang, $array_options);
+			$line_id = $this->create_line($stockLocation, $line_ext->origin_line_id, $qty, $line_ext->rang, $array_options, 0, (int) $line_ext->fk_product); //modif MM
 			if ($line_id < 0) {
 				$error++;
 			} else {
