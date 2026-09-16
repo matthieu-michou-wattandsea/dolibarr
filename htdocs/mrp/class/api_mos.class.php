@@ -1173,7 +1173,7 @@ class Mos extends DolibarrApi
 							'',
 							'',
 							$batch,
-							$id_batch,
+							0,
 							$code
 						);
 					} else {
@@ -1188,7 +1188,7 @@ class Mos extends DolibarrApi
 							'',
 							$batch,
 							$now,
-							$id_batch,
+							0,
 							$code
 						);
 					}
