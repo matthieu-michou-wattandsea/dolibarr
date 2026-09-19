@@ -1194,7 +1194,30 @@ class Mos extends DolibarrApi
 					}
 
 					if ($moveid < 0) {
-						throw new RestException(500, $stockmove->error ? $stockmove->error : 'Stock movement failed');
+						$msg = $stockmove->error;
+						if (empty($msg) && !empty($stockmove->errors)) {
+							$msg = implode('; ', $stockmove->errors);
+						}
+						if ($product->status_batch == 2 && $key === 'arraytoproduce' && $batch !== '') {
+							$hint = 'serial already in stock (unique batch, lot qty > 1)';
+						} elseif ($key === 'arraytoconsume' && $batch !== '') {
+							$hint = 'lot missing or insufficient stock';
+						} else {
+							$hint = 'stock movement rejected';
+						}
+						throw new RestException(
+							500,
+							sprintf(
+								'error on component fk_product=%s batch=%s warehouse=%s qty=%s [%s]: %s%s',
+								$product->id,
+								($batch !== '' ? $batch : '(no batch)'),
+								$warehouse,
+								$qty,
+								$key,
+								$hint,
+								$msg ? ' — '.$msg : ''
+							)
+						);
 					}
 
 					$newline = new MoLine($this->db);

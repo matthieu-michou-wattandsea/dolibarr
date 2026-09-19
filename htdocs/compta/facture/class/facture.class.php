@@ -555,7 +555,14 @@ class Facture extends CommonInvoice
 		}
 
 		$now = dol_now();
-		$this->date_creation = $now;
+		if (empty($this->date_creation) || $this->date_creation <= 0) {
+			if (!empty($this->datec) && $this->datec > 0) {
+				$this->date_creation = $this->datec;
+			} else {
+				$this->date_creation = $now;
+			}
+		}
+		$this->datec = $this->date_creation;
 
 		$this->db->begin();
 
