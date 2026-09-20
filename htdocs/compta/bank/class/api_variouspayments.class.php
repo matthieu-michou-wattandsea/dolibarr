@@ -1,8 +1,13 @@
 <?php
 use Luracast\Restler\RestException;
 
+require_once DOL_DOCUMENT_ROOT.'/api/class/api.class.php';
 require_once DOL_DOCUMENT_ROOT.'/compta/bank/class/paymentvarious.class.php';
 
+/**
+ * @access protected
+ * @class  DolibarrApiAccess {@requires user,external}
+ */
 class VariousPayments extends DolibarrApi
 {
 	public static $FIELDS = array('datep', 'amount', 'sens', 'type_payment', 'fk_account', 'label');

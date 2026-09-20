@@ -2713,6 +2713,10 @@ function getModuleDirForApiClass($moduleobject)
 		$moduledirforclass = 'holiday';
 	} elseif ($moduleobject == 'resources' || $moduleobject == 'dolresources') {
 		$moduledirforclass = 'resource';
+	} elseif ($moduleobject == 'variouspayments') {
+		$moduledirforclass = 'compta/bank';
+	} elseif ($moduleobject == 'socialcontributions') {
+		$moduledirforclass = 'compta/sociales';
 	}
 
 	return $moduledirforclass;
