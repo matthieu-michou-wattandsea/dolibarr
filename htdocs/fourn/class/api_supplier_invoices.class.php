@@ -619,6 +619,7 @@ class SupplierInvoices extends DolibarrApi
 	 * @param string  $chqbank             {@from body}  Issuer bank name (optional)
 	 * @param string  $ref_ext             {@from body}  External reference (optional)
 	 * @param bool    $accepthigherpayment {@from body}  Accept amount > remain (optional)
+	 * @param float   $amount              {@from body}  Bank amount (optional, >= sum of allocations)
 	 *
 	 * @url     POST /paymentsdistributed
 	 *
@@ -628,7 +629,7 @@ class SupplierInvoices extends DolibarrApi
 	 * @throws RestException 403
 	 * @throws RestException 404
 	 */
-	public function addPaymentDistributed($arrayofamounts, $datepaye, $payment_mode_id, $closepaidinvoices, $accountid, $num_payment = '', $comment = '', $chqemetteur = '', $chqbank = '', $ref_ext = '', $accepthigherpayment = false)
+	public function addPaymentDistributed($arrayofamounts, $datepaye, $payment_mode_id, $closepaidinvoices, $accountid, $num_payment = '', $comment = '', $chqemetteur = '', $chqbank = '', $ref_ext = '', $accepthigherpayment = false, $amount = null)
 	{
 		require_once DOL_DOCUMENT_ROOT.'/fourn/class/paiementfourn.class.php';
 
@@ -731,7 +732,25 @@ class SupplierInvoices extends DolibarrApi
 			$this->db->rollback();
 			throw new RestException(400, 'Payment error : '.$paiement->error);
 		}
-
+		if ($amount !== null && $amount !== '') {
+			$bankamount = (float) price2num($amount, 'MT');
+			$sumalloc = 0.0;
+			foreach ($amounts as $v) {
+				$sumalloc += (float) $v;
+			}
+			if (abs($bankamount) + 0.005 < abs($sumalloc)) {
+				$this->db->rollback();
+				throw new RestException(400, 'Bank amount ('.$bankamount.') is lower than allocated ('.$sumalloc.')');
+			}
+			if (abs($bankamount - $sumalloc) >= 0.005) {
+				$resql = $this->db->query("UPDATE ".MAIN_DB_PREFIX."paiementfourn SET amount = ".((float) $bankamount)." WHERE rowid = ".((int) $paiement_id));
+				if (!$resql) {
+					$this->db->rollback();
+					throw new RestException(500, $this->db->lasterror());
+				}
+				$paymentobj->amount = $bankamount;
+			}
+		}
 		if (isModEnabled("bank")) {
 			if ($paiement->paiementcode == 'CHQ' && empty($chqemetteur)) {
 				$this->db->rollback();
