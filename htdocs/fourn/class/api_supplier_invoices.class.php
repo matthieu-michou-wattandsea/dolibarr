@@ -604,6 +604,152 @@ class SupplierInvoices extends DolibarrApi
 	}
 
 	/**
+	 * Add a payment to pay partially or completely one or several supplier invoices.
+	 * All invoices must belong to the same supplier.
+	 * Example arrayofamounts: {"12": {"amount": "99.99", "multicurrency_amount": ""}, "15": {"amount": "50", "multicurrency_amount": ""}}
+	 *
+	 * @param array   $arrayofamounts      {@from body}  Invoice id => amount
+	 * @param string  $datepaye            {@from body}  Payment date (timestamp or parseable string)
+	 * @param int     $payment_mode_id     {@from body}  Payment mode Id {@min 1}
+	 * @param string  $closepaidinvoices   {@from body}  Close paid invoices {@choice yes,no}
+	 * @param int     $accountid           {@from body}  Bank account Id {@min 1}
+	 * @param string  $num_payment         {@from body}  Payment number (optional)
+	 * @param string  $comment             {@from body}  Note private (optional)
+	 * @param string  $chqemetteur         {@from body}  Payment issuer (mandatory if CHQ)
+	 * @param string  $chqbank             {@from body}  Issuer bank name (optional)
+	 * @param string  $ref_ext             {@from body}  External reference (optional)
+	 * @param bool    $accepthigherpayment {@from body}  Accept amount > remain (optional)
+	 *
+	 * @url     POST /paymentsdistributed
+	 *
+	 * @return int  Payment ID
+	 *
+	 * @throws RestException 400
+	 * @throws RestException 403
+	 * @throws RestException 404
+	 */
+	public function addPaymentDistributed($arrayofamounts, $datepaye, $payment_mode_id, $closepaidinvoices, $accountid, $num_payment = '', $comment = '', $chqemetteur = '', $chqbank = '', $ref_ext = '', $accepthigherpayment = false)
+	{
+		require_once DOL_DOCUMENT_ROOT.'/fourn/class/paiementfourn.class.php';
+
+		if (!DolibarrApiAccess::$user->hasRight("fournisseur", "facture", "creer")) {
+			throw new RestException(403);
+		}
+		if (!is_array($arrayofamounts) || empty($arrayofamounts)) {
+			throw new RestException(400, 'arrayofamounts is mandatory. Example: {"12": {"amount": "99.99", "multicurrency_amount": ""}}');
+		}
+
+		if (isModEnabled("bank") && empty($accountid)) {
+			throw new RestException(400, 'Bank account ID is mandatory');
+		}
+		if (empty($payment_mode_id)) {
+			throw new RestException(400, 'Payment mode ID is mandatory');
+		}
+
+		$this->db->begin();
+
+		$amounts = array();
+		$multicurrency_amounts = array();
+		$socid = null;
+
+		foreach ($arrayofamounts as $id => $amountarray) {
+			$id = (int) $id;
+			if ($id <= 0) {
+				$this->db->rollback();
+				throw new RestException(400, 'Invoice ID is mandatory in arrayofamounts');
+			}
+			if (!DolibarrApi::_checkAccessToResource('fournisseur', $id, 'facture_fourn', 'facture')) {
+				$this->db->rollback();
+				throw new RestException(403, 'Access not allowed on supplier invoice ID '.$id.' for login '.DolibarrApiAccess::$user->login);
+			}
+
+			$result = $this->invoice->fetch($id);
+			if (!$result) {
+				$this->db->rollback();
+				throw new RestException(404, 'Supplier invoice ID '.$id.' not found');
+			}
+
+			if ($socid === null) {
+				$socid = (int) $this->invoice->socid;
+			} elseif ((int) $this->invoice->socid !== $socid) {
+				$this->db->rollback();
+				throw new RestException(400, 'All supplier invoices in one payment must belong to the same thirdparty');
+			}
+
+			if (!is_array($amountarray)) {
+				$amountarray = array('amount' => $amountarray, 'multicurrency_amount' => '');
+			}
+			$amt = $amountarray['amount'] ?? '';
+			$amt_mc = $amountarray['multicurrency_amount'] ?? '';
+
+			$totalpaid = $this->invoice->getSommePaiement();
+			$totaldeposits = $this->invoice->getSumDepositsUsed();
+			$remainstopay = (float) price2num($this->invoice->total_ttc - $totalpaid - $totaldeposits, 'MT');
+
+			if ($amt === 'remain' || $amt === '' || $amt === null) {
+				$paymentamount = $remainstopay;
+			} else {
+				$paymentamount = (float) price2num($amt, 'MT');
+			}
+
+			if (abs($paymentamount) > abs($remainstopay) && !$accepthigherpayment) {
+				$this->db->rollback();
+				throw new RestException(400, 'Payment amount on supplier invoice ID '.$id.' ('.$paymentamount.') is higher than remain to pay ('.$remainstopay.')');
+			}
+
+			if ((int) $this->invoice->type == FactureFournisseur::TYPE_CREDIT_NOTE) {
+				$paymentamount = (float) price2num(-1 * abs($paymentamount), 'MT');
+			}
+
+			$amounts[$id] = $paymentamount;
+			if (!empty($this->invoice->total_ttc)) {
+				$multicurrency_amounts[$id] = (float) price2num($paymentamount * $this->invoice->multicurrency_total_ttc / $this->invoice->total_ttc, 'MT');
+			} else {
+				$multicurrency_amounts[$id] = (float) price2num($this->invoice->multicurrency_total_ttc, 'MT');
+			}
+			unset($amt_mc);
+		}
+
+		$paiement = new PaiementFourn($this->db);
+		if (is_numeric($datepaye)) {
+			$paiement->datepaye = $datepaye;
+		} else {
+			$paiement->datepaye = dol_stringtotime($datepaye);
+		}
+		$paiement->amounts = $amounts;
+		$paiement->multicurrency_amounts = $multicurrency_amounts;
+		$paiement->paiementid = $payment_mode_id;
+		$paiement->paiementcode = (string) dol_getIdFromCode($this->db, (string) $payment_mode_id, 'c_paiement', 'id', 'code', 1);
+		$paiement->num_payment = $num_payment;
+		$paiement->note_private = $comment;
+		if (property_exists($paiement, 'ref_ext')) {
+			$paiement->ref_ext = $ref_ext;
+		}
+
+		$paiement_id = $paiement->create(DolibarrApiAccess::$user, ($closepaidinvoices == 'yes' ? 1 : 0));
+		if ($paiement_id < 0) {
+			$this->db->rollback();
+			throw new RestException(400, 'Payment error : '.$paiement->error);
+		}
+
+		if (isModEnabled("bank")) {
+			if ($paiement->paiementcode == 'CHQ' && empty($chqemetteur)) {
+				$this->db->rollback();
+				throw new RestException(400, 'Emetteur is mandatory when payment code is CHQ');
+			}
+			$result = $paiement->addPaymentToBank(DolibarrApiAccess::$user, 'payment_supplier', '(SupplierInvoicePayment)', $accountid, $chqemetteur, $chqbank);
+			if ($result < 0) {
+				$this->db->rollback();
+				throw new RestException(400, 'Add payment to bank error : '.$paiement->error);
+			}
+		}
+
+		$this->db->commit();
+
+		return $paiement_id;
+	}
+
+	/**
 	 * Sets a supplier invoice as paid
 	 *
 	 * @param   int     $id             Supplier invoice ID
