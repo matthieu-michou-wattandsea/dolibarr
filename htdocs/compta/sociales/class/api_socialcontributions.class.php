@@ -10,6 +10,7 @@ require_once DOL_DOCUMENT_ROOT.'/compta/sociales/class/paymentsocialcontribution
  * @class  DolibarrApiAccess {@requires user,external}
  */
 class SocialContributions extends DolibarrApi
+{
 	public static $FIELDS = array('type', 'label', 'amount', 'date_ech', 'period');
 
 	public function __construct()
