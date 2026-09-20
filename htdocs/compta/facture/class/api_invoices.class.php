@@ -1943,7 +1943,7 @@ class Invoices extends DolibarrApi
 	 * @param string  $chqbank             {@from body}  Issuer bank name (optional)
 	 * @param string  $ref_ext             {@from body}  External reference (optional)
 	 * @param bool    $accepthigherpayment {@from body}  Accept higher payments that it remains to be paid (optional)
-	 * @param float   $amount              {@from body}  Bank amount (optional, >= sum of allocations)
+	 * @param float   $bankamoun           {@from body}  Bank amount (optional, >= sum of allocations)
 	 *
 	 * @url     POST /paymentsdistributed
 	 *
@@ -1954,7 +1954,7 @@ class Invoices extends DolibarrApi
 	 * @throws RestException 403
 	 * @throws RestException 404
 	 */
-	public function addPaymentDistributed($arrayofamounts, $datepaye, $paymentid, $closepaidinvoices, $accountid, $num_payment = '', $comment = '', $chqemetteur = '', $chqbank = '', $ref_ext = '', $accepthigherpayment = false, $amount = null)
+	public function addPaymentDistributed($arrayofamounts, $datepaye, $paymentid, $closepaidinvoices, $accountid, $num_payment = '', $comment = '', $chqemetteur = '', $chqbank = '', $ref_ext = '', $accepthigherpayment = false, $bankamount = null)
 	{
 		require_once DOL_DOCUMENT_ROOT.'/compta/paiement/class/paiement.class.php';
 
@@ -2059,8 +2059,8 @@ class Invoices extends DolibarrApi
 			$this->db->rollback();
 			throw new RestException(400, 'Payment error : '.$paymentobj->error);
 		}
-		if ($amount !== null && $amount !== '') {
-			$bankamount = (float) price2num($amount, 'MT');
+		if ($bankamount !== null && $bankamount !== '') {
+			$bankamount = (float) price2num($bankamount, 'MT');
 			$sumalloc = 0.0;
 			foreach ($amounts as $v) {
 				$sumalloc += (float) $v;
