@@ -748,7 +748,7 @@ class SupplierInvoices extends DolibarrApi
 					$this->db->rollback();
 					throw new RestException(500, $this->db->lasterror());
 				}
-				$paymentobj->amount = $bankamount;
+				$paiement->amount = $bankamount;
 			}
 		}
 		if (isModEnabled("bank")) {
