@@ -292,4 +292,220 @@ class Accountancy extends DolibarrApi
 			}
 		}
 	}
+
+		/**
+	 * List accounting accounts of the current (or given) chart of accounts.
+	 *
+	 * @param	string	$account_number	[=] filter exact account number
+	 * @param	string	$fk_pcg_version	[=] chart code, default = CHARTOFACCOUNTS
+	 * @param	string	$sqlfilters		Other SQL filters, e.g. (t.label:like:'%salaire%')
+	 * @param	int		$limit			Max results
+	 * @param	int		$page			Page number (0-based)
+	 * @return	array
+	 *
+	 * @url GET accounts
+	 *
+	 * @throws RestException 403
+	 * @throws RestException 503
+	 */
+	public function getAccounts($account_number = '', $fk_pcg_version = '', $sqlfilters = '', $limit = 100, $page = 0)
+	{
+		if (!DolibarrApiAccess::$user->hasRight('accounting', 'chartofaccount')
+			&& !DolibarrApiAccess::$user->hasRight('accounting', 'bind', 'write')) {
+			throw new RestException(403, 'No permission to read chart of accounts');
+		}
+
+		$pcg = $this->_resolvePcgVersion($fk_pcg_version);
+
+		$sql = "SELECT t.rowid, t.fk_pcg_version, t.pcg_type, t.account_number, t.account_parent,";
+		$sql .= " t.label, t.labelshort, t.fk_accounting_category, t.active, t.reconcilable,";
+		$sql .= " ca.label as account_category_label";
+		$sql .= " FROM ".$this->db->prefix()."accounting_account as t";
+		$sql .= " LEFT JOIN ".$this->db->prefix()."c_accounting_category as ca ON t.fk_accounting_category = ca.rowid";
+		$sql .= " WHERE t.entity = ".((int) $this->db->escape(getEntity('accounting_account', 0) ? getDolGlobalInt('MAIN_ENTITY', 1) : 1));
+		$sql .= " AND t.fk_pcg_version = '".$this->db->escape($pcg)."'";
+		if ($account_number !== '') {
+			$sql .= " AND t.account_number = '".$this->db->escape($account_number)."'";
+		}
+		if ($sqlfilters !== '') {
+			$errormessage = '';
+			$sql .= $this->forgeSQLFromUniversalSearchCriteria($sqlfilters, $errormessage);
+			if ($errormessage) {
+				throw new RestException(400, 'Error when validating parameter sqlfilters: '.$errormessage);
+			}
+		}
+		$sql .= " ORDER BY t.account_number ASC";
+		if ($limit > 0) {
+			$sql .= $this->db->plimit($limit, ((int) $page) * ((int) $limit));
+		}
+
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			throw new RestException(503, 'Error listing accounting accounts: '.$this->db->lasterror());
+		}
+
+		$list = array();
+		while ($obj = $this->db->fetch_object($resql)) {
+			$list[] = array(
+				'id' => (int) $obj->rowid,
+				'fk_pcg_version' => $obj->fk_pcg_version,
+				'account_number' => $obj->account_number,
+				'label' => $obj->label,
+				'labelshort' => $obj->labelshort,
+				'account_parent' => (int) $obj->account_parent,
+				'pcg_type' => $obj->pcg_type,
+				'account_category' => (int) $obj->fk_accounting_category,
+				'account_category_label' => $obj->account_category_label,
+				'active' => (int) $obj->active,
+				'reconcilable' => (int) $obj->reconcilable,
+			);
+		}
+		return $list;
+	}
+
+	/**
+	 * Get one accounting account by rowid.
+	 *
+	 * @param	int	$id	rowid
+	 * @return	array
+	 *
+	 * @url GET accounts/{id}
+	 *
+	 * @throws RestException 403
+	 * @throws RestException 404
+	 */
+	public function getAccount($id)
+	{
+		if (!DolibarrApiAccess::$user->hasRight('accounting', 'chartofaccount')
+			&& !DolibarrApiAccess::$user->hasRight('accounting', 'bind', 'write')) {
+			throw new RestException(403, 'No permission to read chart of accounts');
+		}
+
+		require_once DOL_DOCUMENT_ROOT.'/accountancy/class/accountingaccount.class.php';
+		$acc = new AccountingAccount($this->db);
+		$result = $acc->fetch((int) $id);
+		if ($result <= 0) {
+			throw new RestException(404, 'Accounting account not found');
+		}
+		return array(
+			'id' => (int) $acc->id,
+			'fk_pcg_version' => $acc->fk_pcg_version,
+			'account_number' => $acc->account_number,
+			'label' => $acc->label,
+			'labelshort' => $acc->labelshort,
+			'account_parent' => (int) $acc->account_parent,
+			'pcg_type' => $acc->pcg_type,
+			'account_category' => (int) $acc->account_category,
+			'account_category_label' => $acc->account_category_label,
+			'active' => (int) $acc->active,
+			'reconcilable' => (int) $acc->reconcilable,
+		);
+	}
+
+	/**
+	 * Create an accounting account in the current chart.
+	 *
+	 * Body example:
+	 * {
+	 *   "account_number": "641100",
+	 *   "label": "Rémunérations du personnel",
+	 *   "labelshort": "Salaires",
+	 *   "fk_pcg_version": "PCG99-BASE",
+	 *   "account_parent_number": "641",
+	 *   "pcg_type": "EXPENSE",
+	 *   "account_category": 0,
+	 *   "active": 1
+	 * }
+	 *
+	 * @param	array	$request_data	Request data
+	 * @return	int						rowid created
+	 *
+	 * @url POST accounts
+	 *
+	 * @throws RestException 400
+	 * @throws RestException 403
+	 * @throws RestException 409
+	 * @throws RestException 500
+	 */
+	public function postAccount($request_data = null)
+	{
+		if (!DolibarrApiAccess::$user->hasRight('accounting', 'chartofaccount')) {
+			throw new RestException(403, 'No permission to create accounting accounts');
+		}
+		if (!is_array($request_data)) {
+			throw new RestException(400, 'Request body must be a JSON object');
+		}
+
+		$account_number = isset($request_data['account_number']) ? trim((string) $request_data['account_number']) : '';
+		$label = isset($request_data['label']) ? trim((string) $request_data['label']) : '';
+		if ($account_number === '') {
+			throw new RestException(400, 'account_number is required');
+		}
+		if ($label === '') {
+			throw new RestException(400, 'label is required');
+		}
+
+		if (!getDolGlobalString('ACCOUNTING_MANAGE_ZERO')) {
+			require_once DOL_DOCUMENT_ROOT.'/core/lib/accounting.lib.php';
+			$account_number = clean_account($account_number);
+		}
+
+		$pcg = $this->_resolvePcgVersion(isset($request_data['fk_pcg_version']) ? (string) $request_data['fk_pcg_version'] : '');
+
+		require_once DOL_DOCUMENT_ROOT.'/accountancy/class/accountingaccount.class.php';
+		$exists = new AccountingAccount($this->db);
+		if ($exists->fetch(0, $account_number, 0, $pcg) > 0) {
+			throw new RestException(409, 'Account number already exists: '.$account_number);
+		}
+
+		$account_parent = 0;
+		if (!empty($request_data['account_parent'])) {
+			$account_parent = (int) $request_data['account_parent'];
+		} elseif (!empty($request_data['account_parent_number'])) {
+			$parent = new AccountingAccount($this->db);
+			$pres = $parent->fetch(0, trim((string) $request_data['account_parent_number']), 0, $pcg);
+			if ($pres <= 0) {
+				throw new RestException(400, 'account_parent_number not found: '.$request_data['account_parent_number']);
+			}
+			$account_parent = (int) $parent->id;
+		}
+
+		$acc = new AccountingAccount($this->db);
+		$acc->fk_pcg_version = $pcg;
+		$acc->account_number = $account_number;
+		$acc->label = $label;
+		$acc->labelshort = isset($request_data['labelshort']) ? trim((string) $request_data['labelshort']) : '';
+		$acc->account_parent = $account_parent;
+		$acc->pcg_type = !empty($request_data['pcg_type']) ? trim((string) $request_data['pcg_type']) : 'XXXXXX';
+		$acc->account_category = !empty($request_data['account_category']) ? (int) $request_data['account_category'] : 0;
+		$acc->active = isset($request_data['active']) ? (int) $request_data['active'] : 1;
+		$acc->reconcilable = isset($request_data['reconcilable']) ? (int) $request_data['reconcilable'] : 0;
+
+		$res = $acc->create(DolibarrApiAccess::$user);
+		if ($res <= 0) {
+			throw new RestException(500, 'Error creating accounting account: '.$acc->error);
+		}
+		return (int) $acc->id;
+	}
+
+	/**
+	 * Resolve chart code (PCG99-BASE, …) from request or CHARTOFACCOUNTS.
+	 *
+	 * @param	string	$fk_pcg_version
+	 * @return	string
+	 * @throws	RestException
+	 */
+	private function _resolvePcgVersion($fk_pcg_version)
+	{
+		if ($fk_pcg_version !== '') {
+			return $fk_pcg_version;
+		}
+		require_once DOL_DOCUMENT_ROOT.'/accountancy/class/accountancysystem.class.php';
+		$sys = new AccountancySystem($this->db);
+		$rid = getDolGlobalInt('CHARTOFACCOUNTS');
+		if ($rid <= 0 || $sys->fetch($rid) <= 0 || empty($sys->pcg_version)) {
+			throw new RestException(400, 'No active chart of accounts (CHARTOFACCOUNTS)');
+		}
+		return $sys->pcg_version;
+	}
 }

@@ -113,4 +113,97 @@ class SocialContributions extends DolibarrApi
 		}
 		return $pid;
 	}
+
+		/**
+	 * List social/fiscal charge types (dictionary c_chargesociales, admin dict id=7)
+	 *
+	 * @param int $active 1=actifs seulement, 0=tous, -1=inactifs
+	 * @param int $fk_pays filtre pays (1=FR), 0=tous
+	 * @return array
+	 * @url GET types
+	 */
+	public function getTypes($active = 1, $fk_pays = 1)
+	{
+		if (!DolibarrApiAccess::$user->hasRight('tax', 'charges', 'lire')
+			&& !DolibarrApiAccess::$user->admin) {
+			throw new RestException(403);
+		}
+
+		$sql = "SELECT id, libelle as label, code, deductible, active, fk_pays, accountancy_code, module";
+		$sql .= " FROM ".$this->db->prefix()."c_chargesociales";
+		$sql .= " WHERE 1=1";
+		if ((int) $active >= 0) {
+			$sql .= " AND active = ".((int) $active);
+		}
+		if ((int) $fk_pays > 0) {
+			$sql .= " AND fk_pays = ".((int) $fk_pays);
+		}
+		$sql .= " ORDER BY libelle";
+
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			throw new RestException(500, $this->db->lasterror());
+		}
+		$out = array();
+		while ($obj = $this->db->fetch_object($resql)) {
+			$out[] = array(
+				'id' => (int) $obj->id,
+				'label' => $obj->label,
+				'code' => $obj->code,
+				'deductible' => (int) $obj->deductible,
+				'active' => (int) $obj->active,
+				'fk_pays' => (int) $obj->fk_pays,
+				'accountancy_code' => $obj->accountancy_code,
+				'module' => $obj->module,
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Create a social/fiscal charge type (same fields as dict.php id=7)
+	 *
+	 * @param array $request_data label (ou libelle), code, deductible, active, fk_pays, accountancy_code
+	 * @return int id
+	 * @url POST types
+	 */
+	public function postType($request_data = null)
+	{
+		if (!DolibarrApiAccess::$user->admin
+			&& !DolibarrApiAccess::$user->hasRight('tax', 'charges', 'creer')) {
+			throw new RestException(403);
+		}
+		if (empty($request_data) || !is_array($request_data)) {
+			throw new RestException(400, 'No data');
+		}
+
+		require_once DOL_DOCUMENT_ROOT.'/compta/sociales/class/cchargesociales.class.php';
+
+		$label = '';
+		if (!empty($request_data['label'])) {
+			$label = $request_data['label'];
+		} elseif (!empty($request_data['libelle'])) {
+			$label = $request_data['libelle'];
+		}
+		if ($label === '') {
+			throw new RestException(400, 'label is required');
+		}
+
+		$obj = new Cchargesociales($this->db);
+		$obj->libelle = $label;
+		$obj->label = $label;
+		$obj->code = isset($request_data['code']) ? $request_data['code'] : '';
+		$obj->deductible = isset($request_data['deductible']) ? (int) $request_data['deductible'] : 1;
+		$obj->active = isset($request_data['active']) ? (int) $request_data['active'] : 1;
+		$obj->fk_pays = isset($request_data['fk_pays']) ? (int) $request_data['fk_pays'] : 1;
+		$obj->accountancy_code = isset($request_data['accountancy_code']) ? $request_data['accountancy_code'] : '';
+		$obj->module = isset($request_data['module']) ? $request_data['module'] : '';
+
+		$id = $obj->create(DolibarrApiAccess::$user);
+		if ($id <= 0) {
+			throw new RestException(500, 'Error creating charge type: '.$obj->error.' '.implode(',', $obj->errors));
+		}
+		return $id;
+	}
 }
+
