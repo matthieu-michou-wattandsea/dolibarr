@@ -157,7 +157,7 @@ class DolibarrModules // Can not be abstract, because we need to instantiate it 
 	const KEY_ENABLED = 7;
 
 	/**
-	 * @var array<array{commentgroup?:string,mainmenu:string,leftmenu:string,langs:string,enabled:int|string,target:string,titre:string,user:int,fk_menu:string,fk_parent:string,url:string,position:int,positionfull:int|string,perms:string,type:string}>|int<1,1> 	Module menu entries (1 means the menu entries are not declared into module descriptor but are hardcoded into menu manager)
+	 * @var array<array{commentgroup?:string,fk_menu:int|string,type:string,titre:string,prefix?:string,mainmenu?:string,leftmenu?:string,url:string,langs?:string,position:int,perms:string,enabled?:int|string,target?:string,user:int,rowid?:int}>|int<1,1> 	Module menu entries (1 means the menu entries are not declared into module descriptor but are hardcoded into menu manager)
 	 */
 	public $menu = array();
 
@@ -250,7 +250,7 @@ class DolibarrModules // Can not be abstract, because we need to instantiate it 
 	public $dictionaries = array();
 
 	/**
-	 * @var array<string|array{data:string,entity:int}> tabs description
+	 * @var array<string|array{data:string,entity?:int}> tabs description
 	 */
 	public $tabs;
 
@@ -2836,7 +2836,7 @@ class DolibarrModules // Can not be abstract, because we need to instantiate it 
 				$versionTitle .= '<br>'.$langs->trans('ModuleUpdateAvailable').' : '.$this->lastVersion;
 			}
 
-			$return .=  '<span class="info-box-icon-version'.($versiontrans ? ' '.$versiontrans : '').' classfortooltip" title="'.dol_escape_js($versionTitle).'" >';
+			$return .=  '<span class="info-box-icon-version'.($versiontrans ? ' '.$versiontrans : '').' classfortooltip" title="'.dolPrintHTMLForAttribute($versionTitle).'" >';
 			$return .=  $this->getVersion(1);
 			$return .=  '</span>';
 		}

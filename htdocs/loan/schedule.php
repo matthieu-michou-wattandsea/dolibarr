@@ -215,7 +215,7 @@ if (isModEnabled('project')) {
 	} else {
 		if (!empty($object->fk_project)) {
 			$proj = new Project($db);
-			$proj->fetch($object->fk_project);
+			$proj->fetch((int) $object->fk_project);
 			$morehtmlref .= ' : '.$proj->getNomUrl(1);
 			if ($proj->title) {
 				$morehtmlref .= ' - '.$proj->title;
@@ -383,7 +383,7 @@ if (empty($pay_without_schedule) && $permissiontoadd) {
 	print '<div class="marginbottomonly inline-block valignmiddle">';
 	print '<span class="opacitymedium">'.$langs->trans("GracePeriodMonths").': </span>';
 	print '<input type="number" id="grace_period_months" min="1" max="'.max(1, $object->nbterm - 1).'" value="1" class="width50 right"> ';
-	print '<input type="button" id="btn_apply_grace_period" class="button valignmiddle" value="'.$langs->trans("ApplyGracePeriod").'">';
+	print '<input type="button" id="btn_apply_grace_period" class="button valignmiddle" value="'.$langs->trans("Apply").'">';
 	print '</div>';
 	print '<br><br>';
 }
@@ -432,6 +432,7 @@ if ($object->nbterm > 0 && count($echeances->lines) == 0) {
 		$int = price2num($int, 'MT');
 		$amort = price2num((float) $mens - (float) $int, 'MT');
 		$insu = ((float) $insurance + (($i == 1) ? (float) $regulInsurance : 0));
+		$cap_rest = (float) price2num((float) $capital - (float) $amort, 'MT');
 
 		// Adjust rounding difference on last term
 		if ($i == $object->nbterm && abs($cap_rest) <= 0.05 && $capital > 0) {

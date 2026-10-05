@@ -87,7 +87,7 @@ require_once DOL_DOCUMENT_ROOT.'/compta/facture/class/facture.class.php';
 require_once DOL_DOCUMENT_ROOT.'/projet/class/project.class.php';
 
 // Load translation files
-$langs->loadLangs(array("main", "other", "dict", "bills", "companies", "errors", "paypal", "stripe")); // File with generic data
+$langs->loadLangs(array("main", "other", "dict", "bills", "companies", "paypal", "stripe")); // File with generic data
 
 // Hook to be used by external payment modules (ie Payzen, ...)
 $hookmanager = new HookManager($db);
@@ -119,14 +119,17 @@ $ws = GETPOST("ws", "aZ09"); // Website reference where the newpayment page is e
 
 if (!$action) {
 	if (!GETPOST("amount", 'alpha') && !$source) {
+		$langs->load('errors');
 		print $langs->trans('ErrorBadParameters')." - amount or source";
 		exit;
 	}
 	if (is_numeric($amount) && !GETPOST("tag", 'alpha') && !$source) {
+		$langs->load('errors');
 		print $langs->trans('ErrorBadParameters')." - tag or source";
 		exit;
 	}
 	if ($source && !GETPOST("ref", 'alpha')) {
+		$langs->load('errors');
 		print $langs->trans('ErrorBadParameters')." - ref";
 		exit;
 	}
@@ -547,6 +550,9 @@ if ($action == 'charge' && isModEnabled('stripe')) {	// Test on permission not r
 	$error = 0;
 	$errormessage = '';
 	$stripeacc = null;
+	$customer = null;
+	$charge = null;
+	$paymentintent = null;
 
 	// When using the old Charge API architecture
 	if (!getDolGlobalInt('STRIPE_USE_INTENT_WITH_AUTOMATIC_CONFIRMATION')) {
@@ -2079,7 +2085,7 @@ if ($source == 'donation') {
 	// Debitor
 	print '<tr class="CTableRow2"><td class="CTableRow2">'.$langs->trans("ThirdParty");
 	print '</td><td class="CTableRow2"><b>';
-	if ($don->morphy == 'mor' && !empty($don->societe)) {
+	if (!empty($don->societe)) {
 		print $don->societe;
 	} else {
 		print $don->getFullName($langs);
@@ -2369,6 +2375,7 @@ if ($source == 'boothlocation') {
 }
 
 if (!$found && !$mesg) {
+	$langs->load('errors');
 	$mesg = $langs->trans("ErrorBadParameters");
 }
 
@@ -2827,6 +2834,7 @@ if (preg_match('/^dopayment/', $action)) {			// If we choose/clicked on the paym
 
 			var cardElement = elements.create('card', {style: style});
 
+				<?php if (!empty($sessionstripe)) { ?>
 			// Comment this to avoid the redirect
 			stripe.redirectToCheckout({
 			  // Make the id field from the Checkout Session creation API response
@@ -2838,6 +2846,10 @@ if (preg_match('/^dopayment/', $action)) {			// If we choose/clicked on the paym
 			  // error, display the localized error message to your customer
 			  // using `result.error.message`.
 			});
+				<?php } else { ?>
+			// $sessionstripe was not created (Stripe API call failed, see the error message printed above)
+			console.error('Failed to create Stripe Checkout Session');
+				<?php } ?>
 
 
 				<?php
@@ -2919,19 +2931,19 @@ if (preg_match('/^dopayment/', $action)) {			// If we choose/clicked on the paym
 							billing_details: {
 								name: 'test'
 								<?php if (GETPOST('email', 'alpha') || (is_object($object) && is_object($object->thirdparty) && !empty($object->thirdparty->email))) {
-									?>, email: '<?php echo dol_escape_js(GETPOST('email', 'alpha') ? GETPOST('email', 'alpha') : $object->thirdparty->email); ?>'<?php
+									?>, email: <?php echo "'".dol_escape_js(GETPOST('email', 'alpha') ? GETPOST('email', 'alpha') : $object->thirdparty->email)."'" ; ?><?php
 								} ?>
 								<?php if (is_object($object) && is_object($object->thirdparty) && !empty($object->thirdparty->phone)) {
-									?>, phone: '<?php echo dol_escape_js($object->thirdparty->phone); ?>'<?php
+									?>, phone: <?php echo "'".dol_escape_js($object->thirdparty->phone)."'" ; ?><?php
 								} ?>
 								<?php if (is_object($object) && is_object($object->thirdparty)) {
 									?>, address: {
-									city: '<?php echo dol_escape_js($object->thirdparty->town); ?>',
+									city: <?php echo "'".dol_escape_js($object->thirdparty->town)."'" ; ?>,
 									<?php if ($object->thirdparty->country_code) {
-										?>country: '<?php echo dol_escape_js($object->thirdparty->country_code); ?>',<?php
+										?>country: <?php echo "'".dol_escape_js($object->thirdparty->country_code)."'" ; ?>,<?php
 									} ?>
-									line1: '<?php echo dol_escape_js(preg_replace('/\s\s+/', ' ', $object->thirdparty->address)); ?>',
-									postal_code: '<?php echo dol_escape_js($object->thirdparty->zip); ?>'
+									line1: <?php echo "'".dol_escape_js(preg_replace('/\s\s+/', ' ', $object->thirdparty->address))."'" ; ?>,
+									postal_code: <?php echo "'".dol_escape_js($object->thirdparty->zip)."'" ; ?>
 									}
 									<?php
 								} ?>
@@ -2999,7 +3011,7 @@ if (preg_match('/^dopayment/', $action)) {			// If we choose/clicked on the paym
 				{
 					console.log("Field Card holder is empty");
 					var displayError = document.getElementById('card-errors');
-					displayError.textContent = '<?php print dol_escape_js($langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("CardOwner"))); ?>';
+					displayError.textContent = <?php print "'".dol_escape_js($langs->trans("ErrorFieldRequired", $langs->transnoentitiesnoconv("CardOwner")))."'" ; ?>;
 				}
 				else
 				{
@@ -3013,19 +3025,19 @@ if (preg_match('/^dopayment/', $action)) {			// If we choose/clicked on the paym
 							billing_details: {
 								name: cardholderName.value
 								<?php if (GETPOST('email', 'alpha') || (is_object($object) && is_object($object->thirdparty) && !empty($object->thirdparty->email))) {
-									?>, email: '<?php echo dol_escape_js(GETPOST('email', 'alpha') ? GETPOST('email', 'alpha') : $object->thirdparty->email); ?>'<?php
+									?>, email: <?php echo "'".dol_escape_js(GETPOST('email', 'alpha') ? GETPOST('email', 'alpha') : $object->thirdparty->email)."'" ; ?><?php
 								} ?>
 								<?php if (is_object($object) && is_object($object->thirdparty) && !empty($object->thirdparty->phone)) {
-									?>, phone: '<?php echo dol_escape_js($object->thirdparty->phone); ?>'<?php
+									?>, phone: <?php echo "'".dol_escape_js($object->thirdparty->phone)."'" ; ?><?php
 								} ?>
 								<?php if (is_object($object) && is_object($object->thirdparty)) {
 									?>, address: {
-									city: '<?php echo dol_escape_js($object->thirdparty->town); ?>',
+									city: <?php echo "'".dol_escape_js($object->thirdparty->town)."'" ; ?>,
 									<?php if ($object->thirdparty->country_code) {
-										?>country: '<?php echo dol_escape_js($object->thirdparty->country_code); ?>',<?php
+										?>country: <?php echo "'".dol_escape_js($object->thirdparty->country_code)."'" ; ?>,<?php
 									} ?>
-									line1: '<?php echo dol_escape_js(preg_replace('/\s\s+/', ' ', $object->thirdparty->address)); ?>',
-									postal_code: '<?php echo dol_escape_js($object->thirdparty->zip); ?>'
+									line1: <?php echo "'".dol_escape_js(preg_replace('/\s\s+/', ' ', $object->thirdparty->address))."'" ; ?>,
+									postal_code: <?php echo "'".dol_escape_js($object->thirdparty->zip)."'" ; ?>
 									}
 									<?php
 								} ?>

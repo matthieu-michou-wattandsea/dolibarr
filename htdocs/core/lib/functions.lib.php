@@ -147,7 +147,7 @@ function formatLogObject($data)
  *
  * @param 	CommonObject|BlockedLog|null	$object 	Dolibarr common object.
  * @param 	string 							$module 	Override object element, for example to use 'mycompany' instead of 'societe'
- * @param	int								$forobject	Return the more complete path for the given object (including ref) instead of for the module only.
+ * @param	int								$forobject	Use 1 to return the more complete path for the given object (including ref) instead of for the module only.
  * @param	string							$mode		'output' (full main dir) or 'outputrel' (relative dir) or 'temp' (full dir for temporary files) or 'version' (full dir for archived files)
  * @return 	string|null									The path of the relative directory of the module, ending with /
  * @since Dolibarr V18
@@ -529,26 +529,33 @@ function isModEnabled($module)
 {
 	global $conf;
 
-	// Fix old names (map to new names)
-	$arrayconv = MODULE_MAPPING;
-	$arrayconvbis = array_flip(MODULE_MAPPING);
-
-	if (!getDolGlobalString('MAIN_USE_NEW_SUPPLIERMOD')) {
-		// Special cases: both use the same module.
-		$arrayconv['supplier_order'] = 'fournisseur';
-		$arrayconv['supplier_invoice'] = 'fournisseur';
+	if (!empty($conf->modules[$module])) {
+		return true;	// Most calls use the real name of the module: no need to look at the old/new names mapping
 	}
 
-	$module_alt = $module;
-	if (!empty($arrayconv[$module])) {
-		$module_alt = $arrayconv[$module];
-	}
-	$module_bis = $module;
-	if (!empty($arrayconvbis[$module])) {
-		$module_bis = $arrayconvbis[$module];
+	// Fix old names (map to new names). The mappings are constant for the request, so they are built once: this function is
+	// called thousands of times per page (hooks, rights, logs...), and array_flip() on each call was most of its cost.
+	static $arrayconv = null;
+	static $arrayconvbis = null;
+	if ($arrayconv === null) {
+		$arrayconv = MODULE_MAPPING;
+		$arrayconvbis = array_flip(MODULE_MAPPING);
+
+		if (!getDolGlobalString('MAIN_USE_NEW_SUPPLIERMOD')) {
+			// Special cases: both use the same module.
+			$arrayconv['supplier_order'] = 'fournisseur';
+			$arrayconv['supplier_invoice'] = 'fournisseur';
+		}
 	}
 
-	return !empty($conf->modules[$module]) || !empty($conf->modules[$module_alt]) || !empty($conf->modules[$module_bis]);
+	if (!empty($arrayconv[$module]) && !empty($conf->modules[$arrayconv[$module]])) {
+		return true;
+	}
+	if (!empty($arrayconvbis[$module]) && !empty($conf->modules[$arrayconvbis[$module]])) {
+		return true;
+	}
+
+	return false;
 }
 
 /**
@@ -623,14 +630,15 @@ function isDolTms($timestamp)
  * @param	string	$pass		Password (clear)
  * @param	string	$name		Name of database
  * @param	int		$port		Port of database server
+ * @param	bool	$forcenew	Force opening of a genuinely new connection instead of reusing one already opened to the same server/database in this process (only meaningful for drivers, like pgsql, that may otherwise transparently reuse a matching connection)
  * @return	DoliDB				A DoliDB instance
  */
-function getDoliDBInstance($type, $host, $user, $pass, $name, $port)
+function getDoliDBInstance($type, $host, $user, $pass, $name, $port, $forcenew = false)
 {
 	require_once DOL_DOCUMENT_ROOT . "/core/db/" . $type . '.class.php';
 
 	$class = 'DoliDB' . ucfirst($type);
-	$db = new $class($type, $host, $user, $pass, $name, $port);
+	$db = new $class($type, $host, $user, $pass, $name, $port, $forcenew);
 	return $db;
 }
 
@@ -1673,7 +1681,7 @@ function dol_include_once($relpath, $classname = '')
 /**
  *	Return path of url or filesystem. Can check into alternate dir or alternate dir + main dir depending on value of $returnemptyifnotfound.
  *
- * 	@param	string	$path						Relative path to file (if mode=0) or relative url (if mode=1). Ie: mydir/myfile, ../myfile
+ * 	@param	string	$path						Relative path to file (if mode=0) or relative url (if mode=1). Ie: '/mymoduledir/myfile'
  *  @param	int		$type						0=Used for a Filesystem path,
  *  											1=Used for an URL path (output relative),
  *  											2=Used for an URL path (output full path using same host that current url),
@@ -1746,7 +1754,7 @@ function dol_buildpath($path, $type = 0, $returnemptyifnotfound = 0)
 			$regs = array();
 			preg_match('/^([^\?]+(\.css\.php|\.css|\.js\.php|\.js|\.png|\.jpg|\.php)?)/i', $path, $regs); // Take part before '?'
 			if (!empty($regs[1])) {
-				//print $key.'-'.$dirroot.'/'.$path.'-'.$conf->file->dol_url_root[$type].'<br>'."\n";
+				//print $key.' - '.$dirroot.' - '.$path.' - '.$conf->file->dol_url_root[$key].' - '.$regs[1].'<br>'."\n";
 				//if (file_exists($dirroot.'/'.$regs[1])) {
 				if (@file_exists($dirroot . '/' . $regs[1])) {	// avoid [php:warn]
 					if ($type == 1) {
@@ -2078,7 +2086,8 @@ function dol_sanitizePathName($str, $newstr = '_', $unaccent = 0, $allowdash = 0
 }
 
 /**
- *  Clean a string to use it as an URL (into a href or src attribute)
+ *  Clean a string to use it as an URL (into a href or src attribute, or into a js string that is a location).
+ *  Raw '<' and '>' are url encoded (a browser always sends them encoded, so a real URL never holds them).
  *
  *  @param      string		$stringtoclean		String to clean
  *  @param		int			$type				0=Accept all Url, 1=Clean external Url (keep only relative Url)
@@ -2110,6 +2119,9 @@ function dol_sanitizeUrl($stringtoclean, $type = 1)
 		// removing '//' should disable links to external url like //aaa or http//)
 		$stringtoclean = preg_replace(array('/^[a-z]*\/\/+/i'), '', $stringtoclean);
 	}
+
+	// A raw < or > can not be part of a valid URL. We encode them, so the result can not open an html tag or close an inline script block (</script does not need a >).
+	$stringtoclean = str_replace(array('<', '>'), array('%3C', '%3E'), $stringtoclean);
 
 	return $stringtoclean;
 }
@@ -3099,7 +3111,7 @@ function dol_print_date($time, $format = '', $tzoutput = 'auto', $outputlangs = 
  *
  *	@param	int			$timestamp      Timestamp
  *	@param	boolean		$fast           Fast mode. deprecated.
- *  @param	string		$forcetimezone	'' to use the PHP server timezone. Or use a form like 'gmt', 'Europe/Paris' or '+0200' to force timezone.
+ *  @param	string		$forcetimezone	'' to use the PHP server timezone. Or use a form like 'gmt', 'tzserver', 'Europe/Paris' or '+0200' to force timezone.
  *	@return	array{}|array{seconds:int<0,59>,minutes:int<0,59>,hours:int<0,23>,mday:int<1,31>,wday:int<0,6>,mon:int<1,12>,year:int<0,9999>,yday:int<0,366>,0:int}						Array of information
  *										'seconds' => $secs,
  *										'minutes' => $min,
@@ -3120,7 +3132,7 @@ function dol_getdate($timestamp, $fast = false, $forcetimezone = '')
 
 	$datetimeobj = new DateTime();
 	$datetimeobj->setTimestamp($timestamp); // Use local PHP server timezone
-	if ($forcetimezone) {
+	if ($forcetimezone && $forcetimezone != 'tzserver') {
 		$datetimeobj->setTimezone(new DateTimeZone($forcetimezone == 'gmt' ? 'UTC' : $forcetimezone)); //  (add timezone relative to the date entered)
 	}
 	$arrayinfo = array(
@@ -3975,7 +3987,7 @@ function dol_print_phone($phone, $countrycode = '', $contactid = 0, $socid = 0, 
 		$newphone .= '><span class="paddingright fab fa-whatsapp" style="color:#25D366;" title="WhatsApp"></span></a>';
 	}
 
-	if (empty($titlealt)) {
+	if (empty($titlealt) && isset($langs)) {
 		$titlealt = ($withpicto == 'fax' ? $langs->trans("Fax") : $langs->trans("Phone"));
 	}
 	$rep = '';
@@ -4027,7 +4039,7 @@ function dol_print_phone($phone, $countrycode = '', $contactid = 0, $socid = 0, 
  * 	@param	string	$ip			IP
  * 	@param	int		$mode		0=return IP + country/flag, 1=return only country/flag, 2=return only IP
  *  @param	int		$showname	1=Show reverse domain name instead of IP
- * 	@return string 				Formatted IP, with country if GeoIP module is enabled
+ * 	@return string 				Formatted IP, with country (and city, if the GeoIP datafile is a City database) if GeoIP module is enabled
  */
 function dol_print_ip($ip, $mode = 0, $showname = 0)
 {
@@ -4049,6 +4061,11 @@ function dol_print_ip($ip, $mode = 0, $showname = 0)
 			$ret .= '&nbsp;';
 		} else {
 			// Nothing
+		}
+
+		$cityname = dolGetCityFromIp($ip);
+		if ($cityname) {	// Only set if the GeoIP datafile in use is a City database
+			$ret .= dol_escape_htmltag($cityname) . '&nbsp;';
 		}
 	}
 
@@ -4142,6 +4159,38 @@ function dolGetCountryCodeFromIp($ip)
 	}
 
 	return $countrycode;
+}
+
+/**
+ * 	Return a city name from IP. Empty string if not found or if the configured GeoIP
+ *  datafile is a Country-only database (no city record available in that case).
+ *
+ * 	@param	string	$ip			IP
+ * 	@return string 				City name, or ''
+ */
+function dolGetCityFromIp($ip)
+{
+	$cityname = '';
+
+	if (isModEnabled('geoipmaxmind')) {
+		if (getDolGlobalString('GEOIP_VERSION') == 'php') {
+			$datafile = getDolGlobalString('GEOIPMAXMIND_COUNTRY_DATAFILE');
+		} else {
+			$diroffile = getMultidirOutput(null, 'geoipmaxmind');
+			$datafile = $diroffile . '/' . getDolGlobalString('GEOIPMAXMIND_COUNTRY_DATAFILE_EMBEDDED');
+		}
+		if ($datafile) {
+			try {
+				include_once DOL_DOCUMENT_ROOT . '/core/class/dolgeoip.class.php';
+				$geoip = new DolGeoIP('country', $datafile);
+				$cityname = $geoip->getCityNameFromIP($ip);
+			} catch (Exception $e) {
+				//print 'Error with GeoIP database: '.$e->getMessage();
+			}
+		}
+	}
+
+	return $cityname;
 }
 
 
@@ -4632,12 +4681,13 @@ function price($amount, $form = 0, $outlangs = '', $trunc = 1, $rounding = -1, $
  *  should be roundtext2num().
  *
  *	@param	int|float|string|null	$amount		Amount to convert/clean or round
- *	@param	''|'MU'|'MT'|'MS'|'CU'|'CT'|int<0,max>	$rounding		''=No rounding
+ *	@param	''|'MU'|'MT'|'MS'|'CU'|'CT'|'CR'|int<0,max>	$rounding	''=No rounding
  *                                                                  'MU'=Round to Max unit price (MAIN_MAX_DECIMALS_UNIT)
  *                                                                  'MT'=Round to Max for totals with Tax (MAIN_MAX_DECIMALS_TOT)
  *                                                                  'MS'=Round to Max for stock quantity (MAIN_MAX_DECIMALS_STOCK)
  *                                                                  'CU'=Round to Max unit price of foreign currency accuracy
  *                                                                  'CT'=Round to Max for totals with Tax of foreign currency accuracy
+ *																	'CR'=Round to Max accuracy for currency exchange rate (MAIN_MAX_DECIMALS_CURRENCY_RATE)
  *                                                                  Numeric = Nb of digits for rounding (For example 2 for a percentage)
  * 	@param	int<0,2>		$option			Put 1 if you know that content is already universal format number (so no correction on decimal will be done)
  * 											Put 2 if you know that number is a user input (so we know we have to fix decimal separator).
@@ -4754,6 +4804,10 @@ function price2num($amount, $rounding = '', $option = 0)
 			$nbofdectoround = getDolGlobalInt('MAIN_MAX_DECIMALS_CURRENCY_UNIT', getDolGlobalInt('MAIN_MAX_DECIMALS_UNIT'));	// TODO Use param of currency
 		} elseif ($rounding == 'CT') {
 			$nbofdectoround = getDolGlobalInt('MAIN_MAX_DECIMALS_CURRENCY_TOT', getDolGlobalInt('MAIN_MAX_DECIMALS_TOT'));		// TODO Use param of currency
+		} elseif ($rounding == 'CR') {
+			$currencycode = (string) getDolGlobalString('MULTICURRENCY_USE_LIMIT_BY_CURRENCY') ? getDolCurrency() : '';
+			$rounding_const = 'MAIN_MAX_DECIMALS_CURRENCY_RATE' . ($currencycode ? '_' . $currencycode : '');
+			$nbofdectoround = getDolGlobalInt($rounding_const, getDolGlobalInt('MAIN_MAX_DECIMALS_CURRENCY_RATE', 8));
 		} elseif (is_numeric($rounding)) {
 			$nbofdectoround = (int) $rounding;
 		}
@@ -6857,6 +6911,12 @@ function dol_textishtml($msg, $option = 0)
 		return false;
 	}
 
+	// Every pattern below needs a '<' (a tag) or a '&' (an entity): without both, the string can not be HTML. This saves the
+	// dozen of preg_match() below for the very common case of a plain label.
+	if (strpos($msg, '<') === false && strpos($msg, '&') === false) {
+		return false;
+	}
+
 	if ($option == 1) {
 		if (preg_match('/<(html|link|script)/i', $msg)) {
 			return true;
@@ -7050,6 +7110,7 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
 			'__MYCOMPANY_PROFID8__' => $mysoc->idprof8,
 			'__MYCOMPANY_PROFID9__' => $mysoc->idprof9,
 			'__MYCOMPANY_PROFID10__' => $mysoc->idprof10,
+			'__MYCOMPANY_OBJECT__'    => $mysoc->socialobject,
 			'__MYCOMPANY_CAPITAL__' => $mysoc->capital,
 			'__MYCOMPANY_FULLADDRESS__' => (method_exists($mysoc, 'getFullAddress') ? $mysoc->getFullAddress(1, ', ') : ''),	// $mysoc may be stdClass
 			'__MYCOMPANY_ADDRESS__' => $mysoc->address,
@@ -7060,6 +7121,7 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
 			'__MYCOMPANY_COUNTRY__'    => $mysoc->country,
 			'__MYCOMPANY_COUNTRY_ID__' => $mysoc->country_id,
 			'__MYCOMPANY_COUNTRY_CODE__' => $mysoc->country_code,
+			'__MYCOMPANY_CURRENCY__' => $outputlangs->transnoentitiesnoconv("Currency".$conf->currency),
 			'__MYCOMPANY_CURRENCY_CODE__' => $conf->currency
 		));
 	}
@@ -7126,6 +7188,11 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
 				$substitutionarray['__TICKET_MESSAGE__'] = '__TICKET_MESSAGE__';
 				$substitutionarray['__TICKET_PROGRESSION__'] = '__TICKET_PROGRESSION__';
 				$substitutionarray['__TICKET_USER_ASSIGN__'] = '__TICKET_USER_ASSIGN__';
+				$substitutionarray['__TICKET_TYPE_LABEL__'] = '__TICKET_TYPE_LABEL__';
+				$substitutionarray['__TICKET_SEVERITY_LABEL__'] = '__TICKET_SEVERITY_LABEL__';
+				$substitutionarray['__TICKET_CATEGORY_LABEL__'] = '__TICKET_CATEGORY_LABEL__';
+				$substitutionarray['__TICKET_PUBLIC_URL__'] = '__TICKET_PUBLIC_URL__';
+				$substitutionarray['__TICKET_MANAGEMENT_URL__'] = '__TICKET_MANAGEMENT_URL__';
 			}
 			if (isModEnabled('recruitment') && (!is_object($object) || $object->element == 'recruitmentcandidature') && (empty($exclude) || !in_array('recruitment', $exclude)) && (empty($include) || in_array('recruitment', $include))) {
 				$substitutionarray['__CANDIDATE_FULLNAME__'] = '__CANDIDATE_FULLNAME__';
@@ -7283,7 +7350,7 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
 				$substitutionarray['__THIRDPARTY_ZIP__'] = $object->zip ?? '';
 				$substitutionarray['__THIRDPARTY_TOWN__'] = $object->town ?? '';
 				$substitutionarray['__THIRDPARTY_STATE__'] = $object->state ?? '';
-				$substitutionarray['__THIRDPARTY_COUNTRY_ID__'] = ($object->country_id > 0 ?: '');
+				$substitutionarray['__THIRDPARTY_COUNTRY_ID__'] = ($object->country_id > 0 ? $object->country_id : '');
 				$substitutionarray['__THIRDPARTY_COUNTRY_CODE__'] = $object->country_code ?? '';
 				$substitutionarray['__THIRDPARTY_IDPROF1__'] = $object->idprof1 ?? '';
 				$substitutionarray['__THIRDPARTY_IDPROF2__'] = $object->idprof2 ?? '';
@@ -7308,7 +7375,7 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
 				$substitutionarray['__THIRDPARTY_ZIP__'] = $object->thirdparty->zip ?? '';
 				$substitutionarray['__THIRDPARTY_TOWN__'] = $object->thirdparty->town ?? '';
 				$substitutionarray['__THIRDPARTY_STATE__'] = $object->thirdparty->state ?? '';
-				$substitutionarray['__THIRDPARTY_COUNTRY_ID__'] = ($object->thirdparty->country_id > 0 ?: '');
+				$substitutionarray['__THIRDPARTY_COUNTRY_ID__'] = ($object->thirdparty->country_id > 0 ? $object->thirdparty->country_id : '');
 				$substitutionarray['__THIRDPARTY_COUNTRY_CODE__'] = $object->thirdparty->country_code ?? '';
 				$substitutionarray['__THIRDPARTY_IDPROF1__'] = $object->thirdparty->idprof1 ?? '';
 				$substitutionarray['__THIRDPARTY_IDPROF2__'] = $object->thirdparty->idprof2 ?? '';
@@ -7420,6 +7487,13 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
 				$substitutionarray['__TICKET_ANALYTIC_CODE__'] = $object->category_code;
 				$substitutionarray['__TICKET_MESSAGE__'] = $object->message;
 				$substitutionarray['__TICKET_PROGRESSION__'] = $object->progress;
+				// __TICKET_TYPE__, __TICKET_SEVERITY__ and __TICKET_CATEGORY__ hold the raw codes.
+				// An email usually needs the human readable labels instead.
+				$substitutionarray['__TICKET_TYPE_LABEL__'] = empty($object->type_code) ? '' : $outputlangs->getLabelFromKey($db, 'TicketTypeShort'.$object->type_code, 'c_ticket_type', 'code', 'label', $object->type_code);
+				$substitutionarray['__TICKET_SEVERITY_LABEL__'] = empty($object->severity_code) ? '' : $outputlangs->getLabelFromKey($db, 'TicketSeverityShort'.$object->severity_code, 'c_ticket_severity', 'code', 'label', $object->severity_code);
+				$substitutionarray['__TICKET_CATEGORY_LABEL__'] = empty($object->category_code) ? '' : $outputlangs->getLabelFromKey($db, 'TicketCategoryShort'.$object->category_code, 'c_ticket_category', 'code', 'label', $object->category_code);
+				$substitutionarray['__TICKET_PUBLIC_URL__'] = getDolGlobalString('TICKET_URL_PUBLIC_INTERFACE', dol_buildpath('/public/ticket/', 2)).'view.php?track_id='.urlencode((string) $object->track_id);
+				$substitutionarray['__TICKET_MANAGEMENT_URL__'] = dol_buildpath('/ticket/card.php', 2).'?track_id='.urlencode((string) $object->track_id);
 				$userstat = new User($db);
 				if ($object->fk_user_assign > 0) {
 					$userstat->fetch($object->fk_user_assign);
@@ -7800,7 +7874,7 @@ function getCommonSubstitutionArray($outputlangs, $onlykey = 0, $exclude = null,
  *  @param	string		$text	      					Source string in which we must do substitution
  *  @param  array<string,null|string|float|int>	$substitutionarray	Array with key->val to substitute. Example: array('__MYKEY__' => 'MyVal', ...)
  *  @param	?Translate	$outputlangs					Output language
- *  @param	int<0,1>	$converttextinhtmlifnecessary	0=Convert only value into HTML if text is already in HTML
+ *  @param	int<0,1>	$converttextinhtmlifnecessary	0=Convert the substitution value into HTML if the original text is already in HTML
  *  													1=Will also convert initial $text into HTML if we try to insert one value that is HTML
  * 	@return string  		    						Output string after substitutions
  *  @see	complete_substitutions_array(), getCommonSubstitutionArray()
@@ -7839,18 +7913,19 @@ function make_substitutions($text, $substitutionarray, $outputlangs = null, $con
 				// convert $newval into HTML is necessary
 				$text = preg_replace('/__\(' . preg_quote($reg[1], '/') . '\)__/', $msgishtml ? dol_htmlentitiesbr($value) : $value, $text);
 			} else {
-				if (! $msgishtml) {
-					$valueishtml = dol_textishtml($value, 1);
-					//var_dump("valueishtml=".$valueishtml);
+				if (preg_match('/__\(' . preg_quote($reg[1], '/') . '\)__/', $text)) {		// If found, so replacement will be done later
+					if (! $msgishtml) {
+						$valueishtml = dol_textishtml($value, 1);
+						//var_dump("valueishtml=".$valueishtml);
 
-					if ($valueishtml) {
-						$text = dol_htmlentitiesbr($text);
-						$msgishtml = 1;
+						if ($valueishtml) {
+							$text = dol_htmlentitiesbr($text);
+							$msgishtml = 1;
+						}
+					} else {
+						$value = dol_nl2br((string) $value);
 					}
-				} else {
-					$value = dol_nl2br((string) $value);
 				}
-
 				$text = preg_replace('/__\(' . preg_quote($reg[1], '/') . '\)__/', $value, $text);
 			}
 		}
@@ -7877,17 +7952,18 @@ function make_substitutions($text, $substitutionarray, $outputlangs = null, $con
 			// convert $newval into HTML is necessary
 			$text = preg_replace('/__\[' . preg_quote($originalkeyfound, '/') . '\]__/', $msgishtml ? dol_htmlentitiesbr($value) : $value, $text);
 		} else {
-			if (! $msgishtml) {
-				$valueishtml = dol_textishtml($value, 1);
+			if (preg_match('/__\[' . preg_quote($originalkeyfound, '/') . '\]__/', $text)) {		// If found, so replacement will be done later
+				if (! $msgishtml) {
+					$valueishtml = dol_textishtml($value, 1);
 
-				if ($valueishtml) {
-					$text = dol_htmlentitiesbr($text);
-					$msgishtml = 1;
+					if ($valueishtml) {
+						$text = dol_htmlentitiesbr($text);
+						$msgishtml = 1;
+					}
+				} else {
+					$value = dol_nl2br((string) $value);
 				}
-			} else {
-				$value = dol_nl2br((string) $value);
 			}
-
 			$text = preg_replace('/__\[' . preg_quote($originalkeyfound, '/') . '\]__/', $value, $text);
 		}
 	}
@@ -7901,21 +7977,22 @@ function make_substitutions($text, $substitutionarray, $outputlangs = null, $con
 		if (getDolGlobalString('MAIN_MAIL_DO_NOT_USE_SIGN') && ($key == '__USER_SIGNATURE__' || $key == '__SENDEREMAIL_SIGNATURE__')) {
 			$value = ''; // Protection
 		}
-
 		if (empty($converttextinhtmlifnecessary)) {
 			$text = str_replace((string) $key, (string) $value, $text); // Cast to string is needed when value is 123.5 for example
 		} else {
-			if (! $msgishtml) {
-				$valueishtml = dol_textishtml($value, 1);
+			if (strpos($text, (string) $key) !== false) {		// If found, so replacement will be done later
+				if (! $msgishtml) {
+					$valueishtml = dol_textishtml($value, 1);
 
-				if ($valueishtml) {
-					$text = dol_htmlentitiesbr($text);
-					$msgishtml = 1;
+					if ($valueishtml) {
+						$text = dol_htmlentitiesbr($text);
+						$msgishtml = 1;
+					}
+				} else {
+					$value = dol_nl2br((string) $value);
 				}
-			} else {
-				$value = dol_nl2br((string) $value);
 			}
-			$text = str_replace((string) $key, (string) $value, $text); // Cast to string is needed 123.5 for example
+			$text = str_replace((string) $key, (string) $value, $text); // Cast to string is needed, for 123.5 for example
 		}
 	}
 
@@ -7934,7 +8011,7 @@ function make_substitutions($text, $substitutionarray, $outputlangs = null, $con
 	foreach ($substitutionarray as $key => $value) {
 		$lazy_load_arr = array();
 		if (preg_match('/(__[A-Z\_]+__)@lazyload$/', $key, $lazy_load_arr)) {
-			if (isset($lazy_load_arr[1]) && !empty($lazy_load_arr[1])) {
+			if (!empty($lazy_load_arr[1])) {
 				$key_to_substitute = $lazy_load_arr[1];
 				if (preg_match('/' . preg_quote($key_to_substitute, '/') . '/', $text)) {
 					$param_arr = explode(':', (string) $value);
@@ -7959,7 +8036,7 @@ function make_substitutions($text, $substitutionarray, $outputlangs = null, $con
 						}
 
 						// fetch object and set substitution
-						if (isset($memory_object_list[$class]) && isset($memory_object_list[$class]['list'])) {
+						if (isset($memory_object_list[$class]['list'])) {
 							if (method_exists($class, $method)) {
 								if (!isset($memory_object_list[$class]['list'][$id])) {
 									$tmpobj = new $class($db);
@@ -8437,6 +8514,93 @@ function isStringVarMatching($var, $regextext, $matchrule = 1)
 
 
 /**
+ * Evaluate a condition made of simple terms, without eval(). Recognized terms, optionally preceded by '!', separated by '&&' or by '||'
+ * (but not both, so there is no precedence to handle), with no other parenthesis than the ones of the calls:
+ * isModEnabled('xxx'), $user->hasRight('xxx', 'yyy'[, 'zzz']), $user->rights->xxx->yyy[->zzz], $user->admin, $conf->xxx->enabled,
+ * getDolGlobalString('XXX'), getDolGlobalInt('XXX'), $leftmenu == 'xxx', $mainmenu != 'xxx', and the literals 1, 0, true, false.
+ * The result is the one eval() would give (a property that is not set is false, no warning is raised), so verifCond() can use
+ * this function first and keep dol_eval() for the other conditions.
+ *
+ * @param	string		$s		Condition to evaluate
+ * @return	bool|null			Result of the condition, or null if the condition is not made of the known terms only
+ * @see verifCond(), dol_eval()
+ */
+function dolEvalSimpleCondition($s)
+{
+	global $conf, $user, $leftmenu, $mainmenu;
+
+	$s = trim((string) $s);
+	if ($s === '1' || $s === 'true') {
+		return true;
+	}
+	if ($s === '0' || $s === 'false') {
+		return false;
+	}
+	// Only the characters of the known terms, and parentheses only around the quoted arguments of a call
+	if (!preg_match('/^[a-zA-Z0-9_$>=!&|\s\'",()-]+$/', $s)) {
+		return null;
+	}
+	if (strpbrk($s, '()') !== false && !preg_match('/^(?:[^()]*\((?:\s*[\'"][a-zA-Z0-9_]+[\'"]\s*)(?:,\s*[\'"][a-zA-Z0-9_]+[\'"]\s*)*\))*[^()]*$/', $s)) {
+		return null;
+	}
+	$hasand = (strpos($s, '&&') !== false);
+	$hasor = (strpos($s, '||') !== false);
+	if ($hasand && $hasor) {
+		return null;
+	}
+	$terms = ($hasor ? explode('||', $s) : ($hasand ? explode('&&', $s) : array($s)));
+
+	$result = null;
+	foreach ($terms as $term) {
+		$term = trim($term);
+		$negation = false;
+		if (substr($term, 0, 1) === '!') {
+			$negation = true;
+			$term = ltrim(substr($term, 1));
+		}
+		$reg = array();
+		if (preg_match('/^isModEnabled\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*\)$/', $term, $reg)) {
+			$value = isModEnabled($reg[1]);
+		} elseif (preg_match('/^\$user->hasRight\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*,\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*(?:,\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*)?\)$/', $term, $reg)) {
+			$value = (bool) (!empty($reg[3]) ? $user->hasRight($reg[1], $reg[2], $reg[3]) : $user->hasRight($reg[1], $reg[2]));
+		} elseif (preg_match('/^\$user->rights->([a-zA-Z0-9_]+)->([a-zA-Z0-9_]+)(?:->([a-zA-Z0-9_]+))?$/', $term, $reg)) {
+			if (!empty($reg[3])) {
+				$value = !empty($user->rights->{$reg[1]}->{$reg[2]}->{$reg[3]});
+			} else {
+				$value = !empty($user->rights->{$reg[1]}->{$reg[2]});
+			}
+		} elseif ($term === '$user->admin') {
+			$value = !empty($user->admin);
+		} elseif (preg_match('/^\$conf->([a-zA-Z0-9_]+)->enabled$/', $term, $reg)) {
+			$value = !empty($conf->{$reg[1]}->enabled);
+		} elseif (preg_match('/^getDolGlobal(String|Int)\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*\)$/', $term, $reg)) {
+			$value = ($reg[1] == 'Int' ? (bool) getDolGlobalInt($reg[2]) : (bool) getDolGlobalString($reg[2]));
+		} elseif (preg_match('/^\$(leftmenu|mainmenu)\s*(==|!=)\s*[\'"]([a-zA-Z0-9_]*)[\'"]$/', $term, $reg)) {
+			$current = ($reg[1] == 'leftmenu' ? $leftmenu : $mainmenu);
+			$value = ($reg[2] == '==' ? ($current == $reg[3]) : ($current != $reg[3]));
+		} elseif ($term === '1' || $term === 'true') {
+			$value = true;
+		} elseif ($term === '0' || $term === 'false') {
+			$value = false;
+		} else {
+			return null;	// Not a known term, the caller will use eval()
+		}
+		if ($negation) {
+			$value = !$value;
+		}
+		if ($result === null) {
+			$result = $value;
+		} elseif ($hasor) {
+			$result = ($result || $value);
+		} else {
+			$result = ($result && $value);
+		}
+	}
+
+	return $result;
+}
+
+/**
  * Verify if condition in string is ok or not
  *
  * @param 	string	$strToEvaluate		String with condition to check
@@ -8450,6 +8614,12 @@ function verifCond($strToEvaluate, $onlysimplestring = '1')
 	//print $strToEvaluate."<br>\n";
 	$rights = true;
 	if (isset($strToEvaluate) && $strToEvaluate !== '') {
+		// Most of the conditions are simple (isModEnabled('xxx'), $user->hasRight('xxx', 'yyy'), $conf->xxx->enabled...): they are
+		// evaluated directly, without eval() and its checks, when they match one of the known shapes.
+		$rights = dolEvalSimpleCondition($strToEvaluate);
+		if ($rights !== null) {
+			return $rights;
+		}
 		//var_dump($strToEvaluate);
 		//$rep = dol_eval($strToEvaluate, 1, 0, '1'); // to show the error
 		$rep = dol_eval($strToEvaluate, 1, 1, $onlysimplestring); // The dol_eval() must contains all the "global $xxx;" for all variables $xxx found into the string condition
@@ -10461,7 +10631,7 @@ function getElementProperties($elementType)
 
 	$regs = array();
 
-	//$element_type='facture';
+	//var_dump($elementType);
 
 	$classfile = $classname = $classpath = $subdir = $dir_output = $dir_temp = $parent_element = '';
 
@@ -10472,13 +10642,16 @@ function getElementProperties($elementType)
 	$table_element = $elementType;
 
 	// If we ask a resource form external module (instead of default path)
-	if (preg_match('/^([^@]+)@([^@]+)$/i', $elementType, $regs)) {	// 'myobject@mymodule'
+	if (preg_match('/^([^@]+)@([^@]+)$/i', $elementType, $regs)) {	// 'myobject@mymodule' (usually external modules)
 		$element = $subelement = $regs[1];
+		$table_element = $regs[2].'_'.$regs[1];
+		$subdir = '/'.$regs[1];
 		$module = $regs[2];
-	} elseif (preg_match('/^([^_]+)_([^_]+)/i', $element, $regs)) {	// 'myobject_mysubobject' with myobject=mymodule, example 'project_task'
+	} elseif (preg_match('/^([^_]+)_([^_]+)/i', $element, $regs)) {	// old deprecated syntax: 'myobject_mysubobject' with myobject=mymodule, example 'project_task'
 		// This is an alternative syntax to 'myobject@mymodule', so it must not be applied when the previous case already matched,
 		// otherwise the module resolved from the '@' syntax would be overwritten by a wrong guess when $element contains a '_'.
 		$module = $element = $regs[1];
+		$table_element = $elementType;
 		$subelement = $regs[2];
 	}
 
@@ -10489,7 +10662,7 @@ function getElementProperties($elementType)
 		$classpath = $module . '/class';
 		$classfile = $module;
 		$classname = preg_replace('/det$/', 'Line', $element);
-		if (in_array($module, array('expedition', 'propale', 'facture', 'contrat', 'fichinter', 'supplier_order', 'commandefournisseur'))) {
+		if (in_array($module, array('expedition', 'propale', 'facture', 'contrat', 'fichinter', 'ficheinter', 'supplier_order', 'commandefournisseur'))) {
 			$classname = preg_replace('/det$/', 'Ligne', $element);
 		}
 	}
@@ -10510,16 +10683,27 @@ function getElementProperties($elementType)
 		$subelement = 'adherent_type';
 		$classname = 'AdherentType';
 		$table_element = 'adherent_type';
-	} elseif ($elementType == 'bank_account') {
+	} elseif ($elementType == 'bank_account' || $elementType == 'bank' || $elementType == 'banque') {
+		// 'bank' is the value used for the modulepart when downloading files attached to a bank account
 		$classpath = 'compta/bank/class';
 		$module = 'bank';	// We need $conf->bank->dir_output and not $conf->banque->dir_output
 		$classfile = 'account';
 		$classname = 'Account';
+		$element = $subelement = 'bank_account';
+		$table_element = 'bank_account';
 	} elseif ($elementType == 'bank_line') {
 		$classpath = 'compta/bank/class';
 		$module = 'bank';	// We need $conf->bank->dir_output and not $conf->banque->dir_output
 		$classfile = 'account';
 		$classname = 'AccountLine';
+	} elseif ($elementType == 'remisecheque') {
+		$classpath = 'compta/paiement/cheque/class';
+		$classfile = 'remisecheque';
+		$classname = 'RemiseCheque';
+		$module = 'bank';
+		$element = 'chequereceipt';
+		$subelement = 'cheque';
+		$table_element = 'bordereau_cheque';
 	} elseif ($elementType == 'category') {
 		$classpath = 'categories/class';
 		$module = 'categorie';
@@ -10546,10 +10730,12 @@ function getElementProperties($elementType)
 		$classfile = 'entrepot';
 		$classname = 'Entrepot';
 		$table_element = 'entrepot';
-	} elseif ($elementType == 'project') {
+	} elseif ($elementType == 'project' || $elementType == 'projet') {
 		$classpath = 'projet/class';
 		$module = 'projet';
 		$table_element = 'projet';
+		$classfile = 'project';
+		$classname = 'Project';
 	} elseif ($elementType == 'project_task') {
 		$classpath = 'projet/class';
 		$module = 'projet';
@@ -10687,7 +10873,7 @@ function getElementProperties($elementType)
 		$module = 'cabinetmed';
 		$subelement = 'cabinetmedcons';
 		$table_element = 'cabinetmedcons';
-	} elseif ($elementType == 'fichinter') {
+	} elseif ($elementType == 'fichinter' || $elementType == 'ficheinter') {
 		$classpath = 'fichinter/class';
 		$module = 'ficheinter';
 		$subelement = 'fichinter';
@@ -10912,6 +11098,17 @@ function getElementProperties($elementType)
 		$classname = 'RecruitmentJobPosition';
 		$subelement = 'recruitmentjobposition';
 		$subdir = '/recruitmentjobposition';
+	} elseif ($elementType == 'recruitment') {
+		// The recruitment module has no class of its own, and the document links of its objects use
+		// the module name as modulepart (see document.php), so the module name resolves to the job
+		// position, the main object of the module.
+		$module = 'recruitment';
+		$classfile = 'recruitmentjobposition';
+		$classpath = 'recruitment/class';
+		$classname = 'RecruitmentJobPosition';
+		$element = $subelement = 'recruitmentjobposition';
+		$table_element = 'recruitment_recruitmentjobposition';
+		$subdir = '/recruitmentjobposition';
 	} elseif ($elementType == 'product_attribute_combination') {
 		$module = 'variants';
 		$classpath = 'variants/class';
@@ -10987,13 +11184,15 @@ function getElementProperties($elementType)
 		$dir_output = $conf->fournisseur->payment->dir_output;
 		$dir_temp = $conf->fournisseur->payment->dir_temp;
 	}
+
 	// The sub directory must not be appended when the module is disabled, because $dir_output is then empty
 	// and we would return a path at the root of the file system instead of an empty string.
 	if (!empty($dir_output)) {
 		$dir_output .= $subdir;
 	}
 	if (!empty($dir_temp)) {
-		$dir_temp .= $subdir;
+		//$dir_temp = preg_replace('/\/temp$/', '', $dir_temp).$subdir.'/temp';		// To get mymoduledir/myobject/temp
+		$dir_temp .= $subdir;														// To get mymoduledir/temp/myobject
 	}
 
 	$elementProperties = array(
@@ -11060,8 +11259,9 @@ function fetchObjectByElement($element_id, $element_type, $element_ref = '', $us
 	$ret = 0;
 
 	$element_prop = getElementProperties($element_type);
-	//var_dump($element_prop); exit;
+	//var_dump($element_type, $element_prop);
 
+	// Check special cases
 	if ($element_prop['module'] == 'product' || $element_prop['module'] == 'service') {
 		// For example, for an extrafield 'product' (shared for both product and service) that is a link to an object,
 		// this is called with $element_type = 'product' when we need element properties of a service, we must return a product. If we create the
@@ -11073,6 +11273,7 @@ function fetchObjectByElement($element_id, $element_type, $element_ref = '', $us
 	} else {
 		$ismodenabled = isModEnabled($element_prop['module']);
 	}
+
 	//var_dump('element_type='.$element_type);
 	//var_dump($element_prop);
 	//var_dump($element_prop['module'].' '.$ismodenabled);
@@ -11089,6 +11290,7 @@ function fetchObjectByElement($element_id, $element_type, $element_ref = '', $us
 		if ($includeresult === false) {
 			dol_syslog('fetchObjectByElement: class file /' . $element_prop['classpath'] . '/' . $element_prop['classfile'] . '.class.php not found for element ' . $element_type, LOG_WARNING);
 		}
+		//var_dump('/' . $element_prop['classpath'] . '/' . $element_prop['classfile'] . '.class.php', $element_prop['classname']);
 
 		if (class_exists($element_prop['classname'])) {
 			$className = $element_prop['classname'];
@@ -11108,6 +11310,13 @@ function fetchObjectByElement($element_id, $element_type, $element_ref = '', $us
 			/** @var CommonObject $objecttmp */
 
 			if ($element_id > 0 || !empty($element_ref)) {
+				// Special case for job, there is no ref, it is the id
+				// TODO Replace hard coded code with a test if object has a ref or not.
+				if (empty($element_id) && !empty($element_ref) && (in_array($objecttmp->element, array('evaluation', 'job', 'position', 'skill')))) {
+					$element_id = $element_ref;
+					$element_ref = '';
+				}
+
 				$ret = $objecttmp->fetch($element_id, $element_ref);
 				if ($ret >= 0) {
 					if (empty($objecttmp->module)) {
@@ -11133,7 +11342,7 @@ function fetchObjectByElement($element_id, $element_type, $element_ref = '', $us
 				return $objecttmp;	// returned an object without fetch
 			}
 		} else {
-			dol_syslog($element_prop['classname'] . ' doesn\'t exists in /' . $element_prop['classpath'] . '/' . $element_prop['classfile'] . '.class.php');
+			dol_syslog($element_prop['classname'] . " doesn't exists in /" . $element_prop['classpath'] . "/" . $element_prop['classfile'] . ".class.php");
 			return -1;
 		}
 	}
@@ -11599,7 +11808,6 @@ function dolForgeSQLCriteriaCallback($matches)
 			$reg = array();
 			$tmpelem = trim($tmpelem);
 			if (preg_match('/^\'(.*)\'$/', $tmpelem, $reg)) {
-				$tmpelemarray[$tmpkey] = "'" . $db->escape($db->sanitize($reg[1], 2, 1, 1, 1)) . "'";
 				$tmpelemarray[$tmpkey] = "'".$db->escape($db->sanitize($reg[1], 2, 1, 1, 1))."'";
 			} elseif (preg_match('/^[0-9]+$/', (string) $tmpelem)) {	// if only 0-9 chars, no .
 				$tmpelemarray[$tmpkey] = (int) $tmpelem;
